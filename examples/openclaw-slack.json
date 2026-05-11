@@ -1,0 +1,15 @@
+{
+  // adk-gateway config — Slack only
+  "agent": {
+    "model": "anthropic/claude-sonnet-4"
+  },
+  "channels": {
+    "slack": {
+      "enabled": true,
+      "botToken": "${SLACK_BOT_TOKEN}",
+      "appToken": "${SLACK_APP_TOKEN}",
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
+    }
+  }
+}

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 158e5a4c47108f371f3022826e1f31976e9c376184246cb86e400c5f591ba0c8 # shrinks to config = GraphWorkflowConfig { nodes: [GraphNodeConfig { id: "hq6qgm_9c", node_type: Agent, config: Object {"agent_id": String("hq6qgm_9c")} }, GraphNodeConfig { id: "b_549", node_type: Agent, config: Object {"agent_id": String("b_549")} }, GraphNodeConfig { id: "jb506k___wn", node_type: Agent, config: Object {"agent_id": String("jb506k___wn")} }, GraphNodeConfig { id: "uzlzyjx_", node_type: Agent, config: Object {"agent_id": String("uzlzyjx_")} }, GraphNodeConfig { id: "rjv_l_t", node_type: Agent, config: Object {"agent_id": String("rjv_l_t")} }], edges: [GraphEdgeConfig { from: "hq6qgm_9c", to: "b_549", condition: None }, GraphEdgeConfig { from: "b_549", to: "jb506k___wn", condition: None }, GraphEdgeConfig { from: "jb506k___wn", to: "uzlzyjx_", condition: None }, GraphEdgeConfig { from: "uzlzyjx_", to: "rjv_l_t", condition: None }], state_reducers: {}, checkpoint: None, stream_mode: None, max_iterations: Some(2), interrupts: None }
+cc a5cc1ea0d08569389378697f10068f34a889d73c0283c0ffc55bd804fe5436dd # shrinks to action_type = Http

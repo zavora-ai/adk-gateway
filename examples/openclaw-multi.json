@@ -1,0 +1,31 @@
+{
+  // adk-gateway — multi-channel with agent routing
+  "agent": {
+    "model": "gemini/gemini-2.5-flash"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
+      "groups": {
+        "*": { "requireMention": true }
+      }
+    },
+    "slack": {
+      "enabled": true,
+      "botToken": "${SLACK_BOT_TOKEN}",
+      "appToken": "${SLACK_APP_TOKEN}",
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
+    }
+  },
+  "session": {
+    "dmScope": "per-channel-peer",
+    "reset": {
+      "mode": "idle",
+      "idleMinutes": 60
+    }
+  }
+}

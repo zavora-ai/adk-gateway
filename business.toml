@@ -1,0 +1,88 @@
+# AWP Business Context for adk-gateway
+# Full AWP v1.0 schema — describes the gateway to AI agents.
+
+site_name = "adk-gateway"
+site_description = "Multi-channel AI gateway for adk-rust agents — AWP-compliant, Telegram + Slack + WhatsApp + more"
+domain = "localhost"
+
+[business]
+country = "KE"
+languages = ["en"]
+currency = "USD"
+timezone = "UTC"
+
+[brand_voice]
+tone = "technical, direct, helpful"
+greeting = "Hello! I'm adk-gateway, a multi-channel AI gateway."
+
+[[capabilities]]
+name = "health"
+description = "Gateway health check with channel status"
+endpoint = "/health"
+method = "GET"
+access_level = "anonymous"
+
+[[capabilities]]
+name = "status"
+description = "Full gateway status including metrics, pairing, plugins, and agent info"
+endpoint = "/status"
+method = "GET"
+access_level = "known"
+
+[[capabilities]]
+name = "webhook_inbound"
+description = "Inbound webhook for external system integration"
+endpoint = "/hooks/inbound"
+method = "POST"
+access_level = "known"
+
+[[capabilities]]
+name = "rag_search"
+description = "Search the RAG knowledge base"
+endpoint = "/rag/search"
+method = "POST"
+access_level = "known"
+
+[[capabilities]]
+name = "agent_list"
+description = "List all registered agents with their current state"
+endpoint = "/ui/api/agents"
+method = "GET"
+access_level = "known"
+
+[[capabilities]]
+name = "awp_discovery"
+description = "AWP protocol discovery document"
+endpoint = "/.well-known/awp.json"
+method = "GET"
+access_level = "anonymous"
+
+[[capabilities]]
+name = "awp_manifest"
+description = "AWP capability manifest (JSON-LD)"
+endpoint = "/awp/manifest"
+method = "GET"
+access_level = "anonymous"
+
+[[capabilities]]
+name = "awp_a2a"
+description = "Agent-to-agent message endpoint"
+endpoint = "/awp/a2a"
+method = "POST"
+access_level = "known"
+
+[[policies]]
+name = "privacy"
+description = "Session data defaults to 24-hour TTL. Persistent profiles require explicit consent."
+policy_type = "privacy"
+
+[[policies]]
+name = "rate_limiting"
+description = "Per-trust-level rate limits: Anonymous 30/min, Known 120/min, Partner 600/min, Internal unlimited"
+policy_type = "rate_limiting"
+
+[support]
+hours = "24/7 (automated)"
+
+[outreach]
+require_consent = true

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 99fa084b2070983e25dd0c105df329ff0ef3672d4b5109dc5fbb0c8b3c6079d6 # shrinks to dag = [], caller = "agent-a", target = "agent-b"
+cc 361b975eed3073f1b934d46f7a1eb99061acb4d17683c62084937873f0b7f9d2 # shrinks to dag = [DelegationRule { caller_id: "agent-a", target_id: "agent-b", created_at: "" }]

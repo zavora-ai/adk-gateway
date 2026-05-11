@@ -1,0 +1,144 @@
+[package]
+name = "adk-gateway"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85.0"
+license = "Apache-2.0"
+authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
+description = "Multi-channel AI gateway for adk-rust agents — OpenClaw-compatible, Telegram + Slack + more"
+repository = "https://github.com/zavora-ai/adk-gateway"
+keywords = ["ai", "agent", "gateway", "telegram", "slack"]
+categories = ["web-programming", "asynchronous"]
+
+[[bin]]
+name = "adk-gateway"
+path = "src/main.rs"
+
+[[example]]
+name = "multi_agent_demo"
+path = "examples/multi_agent_demo.rs"
+
+[dependencies]
+# ADK crates (path deps for local dev, switch to version for publish)
+adk-core = { path = "../adk-rust/adk-core" }
+adk-agent = { path = "../adk-rust/adk-agent" }
+adk-runner = { path = "../adk-rust/adk-runner" }
+adk-session = { path = "../adk-rust/adk-session" }
+adk-server = { path = "../adk-rust/adk-server" }
+adk-artifact = { path = "../adk-rust/adk-artifact" }
+adk-model = { path = "../adk-rust/adk-model", features = ["gemini", "openai", "anthropic", "ollama", "deepseek", "groq", "openrouter", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova"] }
+adk-tool = { path = "../adk-rust/adk-tool", features = ["mcp"] }
+adk-skill = { path = "../adk-rust/adk-skill" }
+adk-plugin = { path = "../adk-rust/adk-plugin" }
+adk-telemetry = { path = "../adk-rust/adk-telemetry" }
+adk-auth = { path = "../adk-rust/adk-auth" }
+adk-graph = { path = "../adk-rust/adk-graph" }
+adk-memory = { path = "../adk-rust/adk-memory" }
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+async-stream = "0.3"
+
+# Web / HTTP
+axum = { version = "0.8", features = ["macros", "ws"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "timeout", "fs"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking", "cookies"] }
+
+# WebSocket (for Slack Socket Mode)
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+json5 = "0.4"
+
+# Channel SDKs
+teloxide = { version = "0.13", features = ["macros"] }
+
+# Utilities
+uuid = { version = "1.22", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+anyhow = "1.0"
+thiserror = "2.0"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+notify = "7"
+dashmap = "6"
+regex = "1.10"
+arc-swap = "1"
+tokio-util = { version = "0.7", features = ["rt"] }
+libc = "0.2"
+
+# Constant-time comparison for security-sensitive operations
+subtle = "2"
+
+# Cryptographic randomness
+rand = "0.8"
+
+# JWT / JWKS
+jsonwebtoken = "9"
+base64 = "0.22"
+
+# Embedded retrieval
+sqlrite = "1.0.2"
+rusqlite = { version = "0.33", features = ["bundled"] }
+
+# AWP protocol
+awp-types = { path = "../adk-rust/awp-types" }
+adk-awp = { path = "../adk-rust/adk-awp" }
+toml_edit = "0.22"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+urlencoding = "2"
+url = "2.5"
+
+[features]
+default = []
+browser = ["dep:adk-browser"]
+postgres = ["dep:sqlx-core", "dep:sqlx-postgres"]
+redis = ["dep:redis"]
+firestore = ["dep:google-cloud-auth", "dep:google-cloud-token"]
+
+[dependencies.adk-browser]
+path = "../adk-rust/adk-browser"
+optional = true
+
+[dependencies.sqlx-core]
+version = "0.8"
+default-features = false
+features = ["chrono", "json", "_rt-tokio"]
+optional = true
+
+[dependencies.sqlx-postgres]
+version = "0.8"
+default-features = false
+features = ["chrono", "json"]
+optional = true
+
+[dependencies.redis]
+version = "0.27"
+default-features = false
+features = ["tokio-comp", "aio", "connection-manager"]
+optional = true
+
+[dependencies.google-cloud-auth]
+version = "0.16"
+default-features = false
+features = ["default-tls"]
+optional = true
+
+[dependencies.google-cloud-token]
+version = "0.1.2"
+optional = true
+
+[dev-dependencies]
+tempfile = "3"
+proptest = "1"
+wiremock = "0.6"

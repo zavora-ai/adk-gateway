@@ -1,0 +1,77 @@
+# Build artifacts
+target/
+/target/
+**/target/
+debug/
+release/
+
+# Rust specific
+**/*.rs.bk
+*.pdb
+*.d
+*.rlib
+*.rmeta
+*.o
+*.so
+*.dylib
+*.dll
+
+# Incremental compilation
+/target/debug/incremental/
+/target/release/incremental/
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+*.jsonl
+paired_users.json
+quickstart.json
+agents/registry/
+postgres:/
+
+# Temporary files
+tmp/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Environment
+.env
+.env.*
+
+# Kiro workspace
+.kiro/
+
+# Proptest
+# tests/properties/*.proptest-regressions
+
+# Playwright MCP output
+tmp/playwright-mcp-output/
+
+# Logs
+*.log
+
+# Package manager
+.cargo/
+!.cargo/config.toml
+
+# OS generated
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# React UI
+ui/node_modules/
+ui/dist/
+
+# Reference repos (local only, not committed)
+reference/

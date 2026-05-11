@@ -1,0 +1,119 @@
+{
+  // adk-gateway — Graph workflow agent with action nodes
+  //
+  // Demonstrates a Graph-type agent that uses action nodes for a
+  // data processing pipeline:
+  //   1. HTTP fetch → 2. Transform → 3. Conditional routing → 4. LLM analysis
+  //
+  // The agent runs as an isolated binary with its own A2A endpoint.
+  // Action nodes execute programmatic operations (HTTP, transform, switch)
+  // alongside LLM reasoning steps.
+
+  "agent": {
+    "model": "anthropic/claude-sonnet-4"
+  },
+
+  "channels": {
+    "webhook": {
+      "enabled": true,
+      "secret": "${WEBHOOK_SECRET}",
+      "allowFrom": ["*"]
+    }
+  },
+
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback"
+  },
+
+  "user_agents": [
+    {
+      "id": "data-pipeline",
+      "name": "Data Pipeline Agent",
+      "description": "Fetches external data, transforms it, and generates analysis reports",
+      "agent_type": "Graph",
+      "model": "anthropic/claude-sonnet-4",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "instruction": "You are a data analysis agent. Process incoming data through the pipeline and generate clear, actionable reports.",
+      "tools": ["http_request", "calculator"],
+
+      "action_nodes": [
+        {
+          "id": "fetch-data",
+          "config": {
+            "type": "http",
+            "url": "{{data_source_url}}",
+            "method": "GET",
+            "headers": {
+              "Authorization": "Bearer {{api_token}}"
+            },
+            "timeout": 30,
+            "error_handling": "retry",
+            "retry_count": 3,
+            "retry_delay": 1000
+          }
+        },
+        {
+          "id": "transform-response",
+          "config": {
+            "type": "transform",
+            "expression": "data.items | map(select(.status == 'active'))",
+            "input_key": "fetch_result",
+            "output_key": "active_items"
+          }
+        },
+        {
+          "id": "check-threshold",
+          "config": {
+            "type": "switch",
+            "evaluation_mode": "first_match",
+            "conditions": [
+              {
+                "expression": "active_items | length > 100",
+                "target": "summarize-large"
+              },
+              {
+                "expression": "active_items | length > 0",
+                "target": "analyze-small"
+              }
+            ],
+            "default_target": "no-data-response"
+          }
+        },
+        {
+          "id": "no-data-response",
+          "config": {
+            "type": "set",
+            "key": "report",
+            "value": "No active items found in the data source."
+          }
+        }
+      ],
+
+      "workflow_edges": [
+        { "from": "start", "to": "fetch-data", "condition": null },
+        { "from": "fetch-data", "to": "transform-response", "condition": null },
+        { "from": "transform-response", "to": "check-threshold", "condition": null },
+        { "from": "check-threshold", "to": "summarize-large", "condition": "large_dataset" },
+        { "from": "check-threshold", "to": "analyze-small", "condition": "small_dataset" },
+        { "from": "check-threshold", "to": "no-data-response", "condition": "no_data" }
+      ],
+
+      "sub_agents": [],
+      "role": {
+        "allow": ["http_request", "calculator"],
+        "deny": []
+      },
+      "channel_bindings": [
+        {
+          "channel_type": "webhook",
+          "account_id": null,
+          "peer_filter": null
+        }
+      ],
+      "auto_start": true,
+      "temperature": 0.2,
+      "max_output_tokens": 4096
+    }
+  ]
+}

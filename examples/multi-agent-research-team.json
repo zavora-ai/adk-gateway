@@ -1,0 +1,105 @@
+{
+  // adk-gateway — Multi-agent research team
+  //
+  // Demonstrates the multi-agent isolation system with 3 specialized agents:
+  //   1. System Agent (admin) — manages the gateway, creates/starts/stops agents
+  //   2. Research Agent — handles Telegram, uses web_search + code_exec
+  //   3. Writer Agent — handles Slack, uses document tools
+  //
+  // Each user agent runs as its own compiled Rust binary on a separate port,
+  // communicating with the gateway via A2A protocol. Full process isolation,
+  // separate API keys, independent sessions, and RBAC enforcement.
+
+  "agent": {
+    "model": "anthropic/claude-sonnet-4"
+  },
+
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
+    },
+    "slack": {
+      "enabled": true,
+      "botToken": "${SLACK_BOT_TOKEN}",
+      "appToken": "${SLACK_APP_TOKEN}",
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
+    }
+  },
+
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback"
+  },
+
+  "memory": {
+    "backend": "inmemory",
+    "embedding": { "provider": "openai" },
+    "maxObservations": 50,
+    "contextDir": "context"
+  },
+
+  // ── User Agent definitions ──────────────────────────────────────
+  // These are created by the System Agent at startup via agent_create.
+  // The gateway reads this section and auto-creates + auto-starts them.
+
+  "user_agents": [
+    {
+      "id": "research",
+      "name": "Research Agent",
+      "description": "Searches the web and analyzes code for the team",
+      "agent_type": "Llm",
+      "model": "anthropic/claude-sonnet-4",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "instruction": "You are a research assistant. Use web_search to find information and code_exec to run analysis scripts. Be thorough and cite your sources.",
+      "tools": ["web_search", "code_exec", "calculator"],
+      "action_nodes": [],
+      "workflow_edges": [],
+      "sub_agents": [],
+      "role": {
+        "allow": ["web_search", "code_exec", "calculator"],
+        "deny": []
+      },
+      "channel_bindings": [
+        {
+          "channel_type": "telegram",
+          "account_id": null,
+          "peer_filter": null
+        }
+      ],
+      "auto_start": true,
+      "temperature": 0.3,
+      "max_output_tokens": 8192
+    },
+    {
+      "id": "writer",
+      "name": "Writer Agent",
+      "description": "Drafts documents, summaries, and reports for the team",
+      "agent_type": "Llm",
+      "model": "openai/gpt-4o",
+      "api_key_env": "OPENAI_API_KEY",
+      "instruction": "You are a technical writer. Draft clear, well-structured documents. Ask clarifying questions when the request is ambiguous.",
+      "tools": ["document_create", "document_edit", "markdown_render"],
+      "action_nodes": [],
+      "workflow_edges": [],
+      "sub_agents": [],
+      "role": {
+        "allow": ["document_create", "document_edit", "markdown_render"],
+        "deny": []
+      },
+      "channel_bindings": [
+        {
+          "channel_type": "slack",
+          "account_id": null,
+          "peer_filter": null
+        }
+      ],
+      "auto_start": true,
+      "temperature": 0.7,
+      "max_output_tokens": 4096
+    }
+  ]
+}

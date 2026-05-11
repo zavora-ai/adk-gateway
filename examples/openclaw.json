@@ -1,0 +1,27 @@
+{
+  // Minimal adk-gateway config — Telegram only
+  "agent": {
+    "model": "gemini/gemini-2.5-flash"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "${TELEGRAM_BOT_TOKEN}",
+      "dmPolicy": "open",
+      "allowFrom": ["*"]
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback"
+  },
+  // Memory: enables persistent knowledge graph with agent-driven memory management
+  "memory": {
+    "backend": "inmemory",
+    "embedding": { "provider": "openai" },
+    "maxObservations": 50,
+    "summaryObservations": 10,
+    "protocolPath": "memory.md",
+    "contextDir": "context"
+  }
+}

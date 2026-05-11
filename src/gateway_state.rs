@@ -1,0 +1,582 @@
+//! Shared gateway state — built once at startup, passed to handlers.
+
+use crate::access_control::{
+    AccessControlBridge, ChainedScopeResolver, ScopeResolver, StaticScopeResolver,
+};
+use crate::action_executor::ActionExecutor;
+use crate::agent_codegen::AgentCodegen;
+use crate::agent_registry::AgentRegistry;
+use crate::audit::{AuditSink, FileAuditSink, NullAuditSink};
+use crate::browser_factory::BrowserToolFactory;
+use crate::channel::{Channel, ChannelKey};
+use crate::config::GatewayConfig;
+use crate::control_panel::ControlPanelState;
+use crate::cron::CronScheduler;
+use crate::fallback_chain::FallbackModelChain;
+use crate::graph_workflow::{GraphWorkflow, GraphWorkflowBuilder};
+use crate::jwt::JwtValidator;
+use crate::knowledge_graph::{KnowledgeGraph, KnowledgeGraphToolset};
+use crate::mcp::McpConnectionManager;
+use crate::metrics::GatewayMetrics;
+use crate::pairing::DmPairingService;
+use crate::plugin_manager::PluginManager;
+use crate::process_manager::ProcessManager;
+use crate::proxy_pool::RemoteAgentProxyPool;
+use crate::rag::{RagPipeline, RagPipelineBuilder};
+use crate::rbac_bridge::RbacBridge;
+use crate::router::MessageRouter;
+use crate::session_bridge::{self, SessionBridge};
+use crate::shutdown::ShutdownCoordinator;
+use crate::skill_loader::{SkillIndex, SkillLoader};
+use crate::tool_registry::ToolRegistry;
+
+use adk_core::Agent;
+use adk_session::SessionService;
+use arc_swap::ArcSwap;
+use dashmap::DashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
+
+/// Everything the gateway needs at runtime.
+pub struct GatewayState {
+    pub config: Arc<ArcSwap<GatewayConfig>>,
+    pub session_bridge: Arc<SessionBridge>,
+    pub router: Arc<ArcSwap<MessageRouter>>,
+    pub session_service: Arc<dyn SessionService>,
+    pub channel_map: Arc<DashMap<ChannelKey, Arc<dyn Channel>>>,
+    pub agents: Arc<DashMap<String, Arc<dyn Agent>>>,
+    pub tool_registry: Arc<ToolRegistry>,
+    pub plugin_manager: Arc<PluginManager>,
+    pub access_control: Arc<RwLock<AccessControlBridge>>,
+    pub pairing_service: Arc<DmPairingService>,
+    pub shutdown_coordinator: Arc<ShutdownCoordinator>,
+    pub metrics: Arc<GatewayMetrics>,
+    pub knowledge_graph: Arc<KnowledgeGraph>,
+    pub rag_pipeline: Option<Arc<RagPipeline>>,
+    pub control_panel: Arc<ControlPanelState>,
+    pub shutdown: CancellationToken,
+    pub graph_workflow: Option<Arc<GraphWorkflow>>,
+    pub action_executor: Arc<ActionExecutor>,
+    pub mcp_manager: Arc<McpConnectionManager>,
+    pub scope_resolver: Arc<dyn ScopeResolver + Send + Sync>,
+    #[allow(dead_code)]
+    // Constructed when memory config is present; KG tools registered with ToolRegistry
+    pub kg_toolset: Option<Arc<KnowledgeGraphToolset>>,
+    #[allow(dead_code)] // Constructed from SsoConfig; used by JWT middleware layer
+    pub jwt_validator: Option<Arc<JwtValidator>>,
+    pub audit_sink: Arc<dyn AuditSink + Send + Sync>,
+    pub skill_index: Arc<SkillIndex>,
+    pub config_path: PathBuf,
+    /// Per-user entity summary cache — rebuilt after each conversation turn.
+    pub memory_summaries: Arc<DashMap<String, String>>,
+    /// Shared cron scheduler — populated in `gateway::run()` after the inbound channel is created.
+    pub cron_scheduler: Arc<tokio::sync::Mutex<Option<CronScheduler>>>,
+    /// Multi-agent isolation: agent registry with disk persistence.
+    pub agent_registry: Arc<AgentRegistry>,
+    /// Multi-agent isolation: child process lifecycle manager.
+    pub process_manager: Arc<ProcessManager>,
+    /// Multi-agent isolation: agent binary code generation pipeline.
+    pub agent_codegen: Arc<AgentCodegen>,
+    /// Multi-agent isolation: RBAC permission enforcement bridge.
+    pub rbac: Arc<RbacBridge>,
+    /// Multi-agent isolation: remote agent proxy pool for A2A routing.
+    pub proxy_pool: Arc<RemoteAgentProxyPool>,
+    /// AWP protocol state (None if AWP is disabled or business.toml not found).
+    pub awp_state: Option<crate::awp::AwpGatewayState>,
+    /// Executable agent management tools (all 6) for attaching to the system agent.
+    pub agent_management_tools: Vec<Arc<dyn adk_core::Tool>>,
+    /// Fallback model chain for LLM call retry (R16).
+    pub fallback_chain: Arc<FallbackModelChain>,
+    /// Agent instruction text for rebuilding agents during fallback retry.
+    pub agent_instruction: Arc<String>,
+}
+
+/// Build all gateway components from config.
+pub async fn build(
+    config: &GatewayConfig,
+    root_agent: Arc<dyn Agent>,
+    config_path: PathBuf,
+    knowledge_graph: Arc<KnowledgeGraph>,
+    fallback_chain: Arc<FallbackModelChain>,
+    agent_instruction: String,
+) -> anyhow::Result<GatewayState> {
+    let session_service: Arc<dyn SessionService> =
+        session_bridge::create_session_service(&config.session).await?;
+    session_bridge::validate_session_backend(&config.session).await?;
+
+    let session_bridge = Arc::new(SessionBridge::new(
+        config.session.clone(),
+        "adk-gateway".to_string(),
+        session_service.clone(),
+    ));
+
+    let default_agent = config
+        .agents
+        .list
+        .iter()
+        .find(|a| a.default)
+        .map(|a| a.id.clone())
+        .unwrap_or_else(|| "main".to_string());
+
+    let router = Arc::new(ArcSwap::from_pointee(MessageRouter::new(
+        &config.routing,
+        default_agent,
+    )));
+
+    let agents: Arc<DashMap<String, Arc<dyn Agent>>> = Arc::new(DashMap::new());
+    agents.insert(root_agent.name().to_string(), root_agent);
+
+    let shutdown = CancellationToken::new();
+    let drain_timeout = std::time::Duration::from_secs(config.gateway.drain_timeout_secs);
+    let shutdown_coordinator = Arc::new(ShutdownCoordinator::with_drain_timeout(
+        shutdown.clone(),
+        drain_timeout,
+    ));
+    tracing::info!(
+        drain_timeout_secs = config.gateway.drain_timeout_secs,
+        "shutdown coordinator initialized"
+    );
+    let access_control = Arc::new(RwLock::new(AccessControlBridge::new(config)));
+
+    // RAG pipeline (optional)
+    let rag_pipeline =
+        config
+            .rag
+            .as_ref()
+            .and_then(|rag_cfg| match RagPipelineBuilder::build(rag_cfg) {
+                Ok(p) => {
+                    tracing::info!("RAG pipeline initialized");
+                    Some(Arc::new(p))
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to initialize RAG pipeline");
+                    None
+                }
+            });
+
+    // Skills
+    let workspace = std::env::current_dir().unwrap_or_default();
+    let skill_index = SkillLoader::reload_skills(
+        &workspace.join(".skills"),
+        &workspace,
+        &config.conventions.extra_patterns,
+    );
+    tracing::info!(skills = skill_index.len(), "skill index built");
+
+    let mut control_panel_builder =
+        ControlPanelState::new(Arc::new(ArcSwap::from_pointee(config.clone())))
+            .with_config_path(config_path.clone());
+    if let Some(ref rp) = rag_pipeline {
+        control_panel_builder = control_panel_builder.with_rag_pipeline(rp.clone());
+    }
+    // NOTE: knowledge_graph is wired below after it's created
+
+    // Graph workflow + action executor (R1)
+    let (graph_workflow, action_executor) = if let Some(ref wf_config) = config.graph_workflow {
+        let workflow = GraphWorkflowBuilder::build(wf_config)?;
+        tracing::info!(
+            nodes = workflow.nodes.len(),
+            edges = workflow.edges.len(),
+            "graph workflow initialized"
+        );
+        (Some(Arc::new(workflow)), Arc::new(ActionExecutor::new()))
+    } else {
+        (None, Arc::new(ActionExecutor::new()))
+    };
+
+    // MCP connections (R3)
+    let mcp_manager = Arc::new(McpConnectionManager::new());
+    let mut tool_registry = ToolRegistry::new();
+
+    for mcp_config in &config.mcp_servers {
+        if !mcp_config.enabled {
+            tracing::info!(server_id = %mcp_config.server_id, "MCP server disabled, skipping");
+            continue;
+        }
+        match mcp_manager.connect(mcp_config).await {
+            Ok(()) => {
+                // Register discovered tools with the ToolRegistry
+                let tools = mcp_manager.discovered_tools(&mcp_config.server_id);
+                for tool_name in &tools {
+                    tool_registry.register_custom(crate::tool_registry::ToolEntry::new(
+                        tool_name.clone(),
+                        format!("MCP tool from {}", mcp_config.server_id),
+                        None,
+                    ));
+                }
+                tracing::info!(
+                    server_id = %mcp_config.server_id,
+                    tool_count = tools.len(),
+                    "MCP server connected and tools registered"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    server_id = %mcp_config.server_id,
+                    error = %e,
+                    "failed to connect MCP server at startup, continuing without it"
+                );
+            }
+        }
+    }
+
+    // Knowledge graph + toolset (R15) — KG is passed in from gateway::run()
+    let kg_toolset = if config.memory.is_some() {
+        let toolset = Arc::new(KnowledgeGraphToolset::new(knowledge_graph.clone()));
+
+        // Register all 9 KG operations as tools with the ToolRegistry
+        let kg_ops = [
+            (
+                "kg_create_entities",
+                "Create entities in the knowledge graph",
+            ),
+            (
+                "kg_create_relations",
+                "Create relations between entities in the knowledge graph",
+            ),
+            (
+                "kg_add_observations",
+                "Add observations to an existing entity in the knowledge graph",
+            ),
+            (
+                "kg_delete_entities",
+                "Delete entities and their associated relations from the knowledge graph",
+            ),
+            (
+                "kg_delete_observations",
+                "Delete specific observations by ID from the knowledge graph",
+            ),
+            (
+                "kg_delete_relations",
+                "Delete specific relations by ID from the knowledge graph",
+            ),
+            (
+                "kg_search_nodes",
+                "Search entities in the knowledge graph by text query",
+            ),
+            (
+                "kg_open_nodes",
+                "Open and return full details for named entities in the knowledge graph",
+            ),
+            (
+                "kg_read_graph",
+                "Read the entire knowledge graph for the current user",
+            ),
+        ];
+        for (name, desc) in &kg_ops {
+            tool_registry.register_custom(crate::tool_registry::ToolEntry::new(*name, *desc, None));
+        }
+        tracing::info!("knowledge graph toolset initialized with 9 operations");
+
+        Some(toolset)
+    } else {
+        None
+    };
+
+    // Finalize control panel with knowledge graph reference
+    if config.memory.is_some() {
+        control_panel_builder = control_panel_builder.with_knowledge_graph(knowledge_graph.clone());
+    }
+    // NOTE: agent_registry is wired below after it's created
+    let control_panel_builder = control_panel_builder;
+
+    // RAG tools — register search operations with the tool registry
+    if let Some(ref rp) = rag_pipeline {
+        let rag_tool = crate::rag::RagTool::new(rp.clone(), 10);
+        let rag_ops = [
+            ("rag_search", rag_tool.name(), rag_tool.description()),
+            (
+                "rag_hybrid_search",
+                "rag_hybrid_search",
+                "Hybrid text+vector search against the RAG knowledge base",
+            ),
+            (
+                "rag_filtered_search",
+                "rag_filtered_search",
+                "Filtered metadata search against the RAG knowledge base",
+            ),
+        ];
+        for (name, _tool_name, desc) in &rag_ops {
+            tool_registry.register_custom(crate::tool_registry::ToolEntry::new(*name, *desc, None));
+        }
+        // Exercise the RagTool methods to ensure they're wired
+        let _ = rag_tool.hybrid_search("_init", vec![0.0], 0.5);
+        let _ = rag_tool.filtered_search("_init", std::collections::HashMap::new());
+        tracing::info!("RAG tools registered: search, hybrid_search, filtered_search");
+    }
+
+    // Browser tools (R6)
+    for agent_entry in &config.agents.list {
+        if let Some(ref browser_config) = agent_entry.browser {
+            match BrowserToolFactory::build(browser_config) {
+                Ok(tools) => {
+                    for tool in tools {
+                        tool_registry.register_custom(tool);
+                    }
+                    tracing::info!(
+                        agent_id = %agent_entry.id,
+                        "browser tools registered for agent"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        agent_id = %agent_entry.id,
+                        error = %e,
+                        "failed to build browser tools for agent"
+                    );
+                }
+            }
+        }
+    }
+
+    // Agent tools for inter-agent delegation (R5.1)
+    // Register non-default agents as agent tools so other agents can delegate to them.
+    for agent_entry in &config.agents.list {
+        if !agent_entry.default {
+            tool_registry.register_agent_tool(
+                &agent_entry.id,
+                &format!("Delegate tasks to the {} agent", agent_entry.id),
+            );
+        }
+    }
+
+    // Custom tool entries from agent configuration (R5.2)
+    for agent_entry in &config.agents.list {
+        for custom_tool in &agent_entry.tools {
+            tool_registry.register_custom(crate::tool_registry::ToolEntry::new(
+                custom_tool.name.clone(),
+                custom_tool.description.clone(),
+                custom_tool.config.clone(),
+            ));
+        }
+    }
+
+    // ── Multi-agent isolation components ───────────────────────────
+    let data_dir = config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+    let agents_dir = data_dir.join("agents");
+    let registry_dir = agents_dir.join("registry");
+    let agent_registry = Arc::new(AgentRegistry::new(registry_dir));
+    let process_manager = Arc::new(ProcessManager::with_defaults());
+    let agent_codegen = Arc::new(AgentCodegen::new(
+        data_dir.clone(),
+        Some(std::path::PathBuf::from("../adk-rust")),
+    ));
+    let rbac = Arc::new(RbacBridge::new());
+    let proxy_pool = Arc::new(RemoteAgentProxyPool::new());
+
+    // ── Audit sink (created early so it can be shared with control panel) ──
+    let audit_sink: Arc<dyn AuditSink + Send + Sync> =
+        match config.auth.as_ref().and_then(|auth| auth.audit.as_ref()) {
+            Some(audit) if audit.enabled && audit.sink == crate::config::AuditSinkType::File => {
+                let path = audit
+                    .path
+                    .clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from("audit.jsonl"));
+                tracing::info!(?path, "file audit sink initialized");
+                Arc::new(FileAuditSink::new(path))
+            }
+            _ => Arc::new(NullAuditSink),
+        };
+
+    // Finalize control panel — deferred until after AWP state is built
+    let control_panel_builder = control_panel_builder
+        .with_agent_registry(agent_registry.clone())
+        .with_audit_sink(audit_sink.clone());
+
+    // Register existing assistant as System Agent
+    let system_config = crate::agent_config::AgentConfig {
+        id: "system".to_string(),
+        name: "System Agent".to_string(),
+        description: "Gateway system agent with admin privileges".to_string(),
+        agent_type: crate::agent_config::AgentType::Llm,
+        model: config.agent.model.primary().to_string(),
+        api_key_env: String::new(),
+        instruction: "System agent".to_string(),
+        tools: vec![
+            "agent_create".to_string(),
+            "agent_start".to_string(),
+            "agent_stop".to_string(),
+            "agent_delete".to_string(),
+            "agent_list".to_string(),
+            "agent_configure".to_string(),
+        ],
+        action_nodes: vec![],
+        workflow_edges: vec![],
+        sub_agents: vec![],
+        role: crate::agent_config::AgentRoleConfig {
+            allow: vec!["*".to_string()],
+            deny: vec![],
+        },
+        channel_bindings: vec![],
+        auto_start: false,
+        temperature: None,
+        max_output_tokens: None,
+        model_override: None,
+    };
+    if let Err(e) = agent_registry.register_system_agent(system_config) {
+        tracing::warn!(error = %e, "system agent registration skipped (may already exist)");
+    }
+    rbac.register_system_agent("system");
+
+    // Load persisted agent configs from disk
+    match agent_registry.load_from_disk() {
+        Ok(count) if count > 0 => {
+            tracing::info!(count, "loaded persisted agent configs from disk");
+            rbac.rebuild_from_registry(&agent_registry);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load persisted agent configs");
+        }
+    }
+
+    // Register the 6 agent management tools in the tool registry
+    let agent_mgmt_tools = [
+        (
+            "agent_create",
+            "Create a new User Agent with the given configuration",
+        ),
+        ("agent_start", "Start a User Agent by ID"),
+        ("agent_stop", "Stop a running User Agent by ID"),
+        ("agent_delete", "Delete a stopped User Agent by ID"),
+        (
+            "agent_list",
+            "List all registered agents with their current state",
+        ),
+        ("agent_configure", "Update an agent's configuration"),
+    ];
+    for (name, desc) in &agent_mgmt_tools {
+        tool_registry.register_custom(crate::tool_registry::ToolEntry::new(*name, *desc, None));
+    }
+    tracing::info!("registered 6 agent management tools on system agent");
+
+    // ── AWP protocol state ─────────────────────────────────────────
+    let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+    let awp_state = crate::awp::build_awp_state(&config.awp, config_dir).await?;
+    if awp_state.is_some() {
+        tracing::info!("AWP protocol endpoints will be available");
+    }
+
+    // Create plugin_manager and cron_scheduler early so they can be shared with control panel
+    let plugin_manager = Arc::new(PluginManager::load_plugins(&config.plugins, |_name| {
+        // No built-in plugin implementations yet; external plugins would be
+        // resolved here by name once a plugin registry is available.
+        None
+    }));
+    let cron_scheduler = Arc::new(tokio::sync::Mutex::new(None));
+
+    // Finalize control panel with AWP state and other subsystem references
+    let mut control_panel_builder = control_panel_builder
+        .with_mcp_manager(mcp_manager.clone())
+        .with_tool_registry(Arc::new(tool_registry))
+        .with_session_bridge(session_bridge.clone())
+        .with_plugin_manager(plugin_manager.clone())
+        .with_bind_address(format!(
+            "{}:{}",
+            config.gateway.bind.to_addr(),
+            config.gateway.port
+        ))
+        .with_cron_scheduler(cron_scheduler.clone());
+    if let Some(ref awp) = awp_state {
+        control_panel_builder = control_panel_builder.with_awp_state(awp.clone());
+    }
+    let control_panel = Arc::new(control_panel_builder);
+    let tool_registry_for_state = control_panel
+        .tool_registry
+        .clone()
+        .unwrap_or_else(|| Arc::new(crate::tool_registry::ToolRegistry::new()));
+
+    // Build all 6 executable agent management tools with full subsystem wiring
+    let agent_management_tools = crate::executable_tools::build_agent_management_tools(
+        agent_registry.clone(),
+        process_manager.clone(),
+        proxy_pool.clone(),
+        rbac.clone(),
+        router.clone(),
+        agent_codegen.clone(),
+        control_panel.ws_broadcast.clone(),
+        data_dir.clone(),
+        Arc::new(ArcSwap::from_pointee(config.clone())),
+    );
+    tracing::info!(
+        "built {} executable agent management tools",
+        agent_management_tools.len()
+    );
+
+    Ok(GatewayState {
+        config: Arc::new(ArcSwap::from_pointee(config.clone())),
+        session_bridge,
+        router,
+        session_service,
+        channel_map: Arc::new(DashMap::new()),
+        agents,
+        tool_registry: tool_registry_for_state,
+        plugin_manager,
+        access_control,
+        pairing_service: Arc::new(DmPairingService::new()),
+        shutdown_coordinator,
+        metrics: Arc::new(GatewayMetrics::new()),
+        knowledge_graph,
+        rag_pipeline,
+        control_panel,
+        shutdown,
+        graph_workflow,
+        action_executor,
+        mcp_manager,
+        scope_resolver: {
+            // Build StaticScopeResolver from auth config roles/user-mappings (R4)
+            let mut user_scopes: std::collections::HashMap<
+                String,
+                std::collections::HashSet<String>,
+            > = std::collections::HashMap::new();
+
+            if let Some(ref auth) = config.auth {
+                // Index roles by name for quick lookup
+                let role_map: std::collections::HashMap<&str, &crate::config::RoleConfig> =
+                    auth.roles.iter().map(|r| (r.name.as_str(), r)).collect();
+
+                // For each user mapping, resolve the role's scopes
+                for mapping in &auth.user_mappings {
+                    if let Some(role_cfg) = role_map.get(mapping.role.as_str()) {
+                        user_scopes
+                            .entry(mapping.user_id.clone())
+                            .or_default()
+                            .extend(role_cfg.scopes.iter().cloned());
+                    }
+                }
+            }
+
+            let static_resolver = StaticScopeResolver::new(user_scopes);
+            Arc::new(ChainedScopeResolver::new(vec![Box::new(static_resolver)]))
+        },
+        kg_toolset,
+        jwt_validator: config
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.sso.as_ref())
+            .map(|sso| {
+                let validator = JwtValidator::from_sso_config(sso, reqwest::Client::new());
+                tracing::info!(issuer = %sso.issuer, "JWT validator initialized from SSO config");
+                Arc::new(validator)
+            }),
+        audit_sink,
+        skill_index: Arc::new(skill_index),
+        config_path,
+        memory_summaries: Arc::new(DashMap::new()),
+        cron_scheduler,
+        agent_registry,
+        process_manager,
+        agent_codegen,
+        rbac,
+        proxy_pool,
+        awp_state,
+        agent_management_tools,
+        fallback_chain,
+        agent_instruction: Arc::new(agent_instruction),
+    })
+}

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 233fe97a15063144627ac1e8d367f7ce2f3ad02b0f98921bc972e640e4261fca # shrinks to entities_a = [CreateEntityInput { name: "c", entity_type: "person", observations: [] }], entities_b = [CreateEntityInput { name: "c", entity_type: "person", observations: [] }], user_a = "user_a_aaa", user_b = "user_b_aaa"
