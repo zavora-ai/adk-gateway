@@ -88,3 +88,83 @@
 2026-05-12T05:23:10.324313Z  INFO adk_gateway::gateway: all agent processes stopped during shutdown
 2026-05-12T05:23:10.324430Z  INFO adk_gateway::pairing: persisted paired users path=/Users/jameskaranja/.openclaw/paired_users.json count=1
 2026-05-12T05:23:10.324937Z  INFO adk_gateway::gateway: config watcher channel closed, hot-reload task exiting
+2026-05-12T05:23:52.472396Z  INFO adk_gateway: telemetry initialized telemetry=log_format=text, otel=disabled, file_logs=daily rotation in logs
+2026-05-12T05:23:52.472475Z  INFO adk_gateway: starting adk-gateway port=18789
+2026-05-12T05:23:52.472619Z  INFO adk_gateway::gateway: initializing model model="anthropic/claude-sonnet-4-6"
+2026-05-12T05:23:52.476166Z  INFO adk_gateway::model_factory: created anthropic model model="claude-sonnet-4-6"
+2026-05-12T05:23:52.476512Z  INFO adk_gateway::gateway: loaded memory protocol (3409 bytes) protocol_path="/Users/jameskaranja/Developer/projects/adk-gateway/context/MEMORY.md"
+2026-05-12T05:23:52.476764Z  INFO adk_gateway::gateway: loaded context file file=PROFILE.md bytes=800
+2026-05-12T05:23:52.476920Z  INFO adk_gateway::gateway: loaded context file file=USER.md bytes=671
+2026-05-12T05:23:52.477016Z  INFO adk_gateway::gateway: loaded context file file=PROJECTS.md bytes=571
+2026-05-12T05:23:52.477182Z  INFO adk_gateway::gateway: loaded context file file=HABITS.md bytes=509
+2026-05-12T05:23:52.477339Z  INFO adk_gateway::gateway: loaded context file file=NOTES.md bytes=452
+2026-05-12T05:23:52.477800Z  INFO adk_gateway::gateway: attached 5 executable KG tools to root agent
+2026-05-12T05:23:52.477861Z  INFO adk_gateway::gateway: root agent ready agent="assistant"
+2026-05-12T05:23:52.477992Z  INFO adk_gateway::session_bridge: session backend: InMemory
+2026-05-12T05:23:52.478485Z  INFO adk_gateway::gateway_state: shutdown coordinator initialized drain_timeout_secs=30
+2026-05-12T05:23:52.478914Z  INFO adk_gateway::rag: building RAG pipeline vector_store=InMemory embedding=gemini chunking=FixedSize
+2026-05-12T05:23:52.481485Z  INFO adk_gateway::gateway_state: RAG pipeline initialized
+2026-05-12T05:23:52.481577Z  WARN adk_gateway::skill_loader: cannot read skills directory dir=/Users/jameskaranja/Developer/projects/adk-gateway/.skills error=No such file or directory (os error 2)
+2026-05-12T05:23:52.483123Z  INFO adk_gateway::skill_loader: skill hot-reload: loaded 0 skills and 0 conventions skills_count=0 conventions_count=0
+2026-05-12T05:23:52.483224Z  INFO adk_gateway::gateway_state: skill index built skills=0
+2026-05-12T05:23:52.483981Z  INFO adk_gateway::gateway_state: knowledge graph toolset initialized with 9 operations
+2026-05-12T05:23:52.484532Z  INFO adk_gateway::gateway_state: RAG tools registered: search, hybrid_search, filtered_search
+2026-05-12T05:23:52.487197Z  INFO adk_gateway::gateway_state: loaded persisted agent configs from disk count=1
+2026-05-12T05:23:52.487841Z  INFO adk_gateway::gateway_state: registered 6 agent management tools on system agent
+2026-05-12T05:23:52.487889Z  INFO adk_gateway::awp: AWP protocol disabled
+2026-05-12T05:23:52.487922Z  INFO adk_gateway::gateway_state: built 6 executable agent management tools
+2026-05-12T05:23:52.488818Z  INFO adk_gateway::gateway: attached 6 agent management tools to root agent
+2026-05-12T05:23:52.489179Z  INFO adk_gateway::gateway: restoring paired users from disk count=1
+2026-05-12T05:23:52.499003Z  INFO adk_gateway::config_watcher: config watcher started path=/Users/jameskaranja/.openclaw/openclaw.json
+2026-05-12T05:23:52.499779Z  INFO adk_gateway::channel: telegram channel enabled account_id=default
+2026-05-12T05:23:53.640099Z  INFO adk_gateway::channel::telegram: telegram bot authenticated username=SuzyTestBot
+2026-05-12T05:23:53.640172Z  INFO adk_gateway::gateway: channel started channel=telegram:default
+2026-05-12T05:23:53.640418Z  INFO adk_gateway::channel::telegram: telegram polling started
+2026-05-12T05:23:53.640432Z  INFO adk_gateway::gateway: message processor started
+2026-05-12T05:23:53.643360Z  INFO adk_gateway::gateway: HTTP server listening addr=127.0.0.1:18789
+2026-05-12T05:23:53.643379Z  INFO adk_gateway::gateway: 📊 Control panel: http://127.0.0.1:18789/ui
+2026-05-12T05:24:25.502398Z  INFO adk_gateway::gateway: ctrl-c received, draining...
+2026-05-12T05:24:25.502441Z  INFO adk_gateway::shutdown: shutdown initiated, draining in-flight messages…
+2026-05-12T05:24:25.502451Z  INFO adk_gateway::shutdown: all in-flight messages drained
+2026-05-12T05:24:25.502527Z  INFO adk_gateway::gateway: channel shut down channel=telegram:default
+2026-05-12T05:24:25.502599Z  INFO adk_gateway::gateway: stopping running agent processes during shutdown count=1
+2026-05-12T05:24:25.502614Z  INFO adk_gateway::gateway: stopping agent process during shutdown agent_id=system
+2026-05-12T05:24:25.502712Z  WARN adk_gateway::gateway: failed to stop agent during shutdown agent_id=system error=agent 'system' not found in process manager
+2026-05-12T05:24:25.503444Z  INFO adk_gateway::gateway: all agent processes stopped during shutdown
+2026-05-12T05:24:25.503547Z  INFO adk_gateway::pairing: persisted paired users path=/Users/jameskaranja/.openclaw/paired_users.json count=1
+2026-05-12T05:24:25.503857Z  INFO adk_gateway::gateway: config watcher channel closed, hot-reload task exiting
+2026-05-12T05:25:41.525379Z  INFO adk_gateway: telemetry initialized telemetry=log_format=text, otel=disabled, file_logs=daily rotation in logs
+2026-05-12T05:25:41.525486Z  INFO adk_gateway: starting adk-gateway port=18789
+2026-05-12T05:25:41.525540Z  INFO adk_gateway::gateway: initializing model model="anthropic/claude-sonnet-4-6"
+2026-05-12T05:25:41.529978Z  INFO adk_gateway::model_factory: created anthropic model model="claude-sonnet-4-6"
+2026-05-12T05:25:41.530475Z  INFO adk_gateway::gateway: loaded memory protocol (3409 bytes) protocol_path="/Users/jameskaranja/Developer/projects/adk-gateway/context/MEMORY.md"
+2026-05-12T05:25:41.530776Z  INFO adk_gateway::gateway: loaded context file file=PROFILE.md bytes=800
+2026-05-12T05:25:41.530932Z  INFO adk_gateway::gateway: loaded context file file=USER.md bytes=671
+2026-05-12T05:25:41.531027Z  INFO adk_gateway::gateway: loaded context file file=PROJECTS.md bytes=571
+2026-05-12T05:25:41.531165Z  INFO adk_gateway::gateway: loaded context file file=HABITS.md bytes=509
+2026-05-12T05:25:41.531296Z  INFO adk_gateway::gateway: loaded context file file=NOTES.md bytes=452
+2026-05-12T05:25:41.531619Z  INFO adk_gateway::gateway: attached 5 executable KG tools to root agent
+2026-05-12T05:25:41.531691Z  INFO adk_gateway::gateway: root agent ready agent="assistant"
+2026-05-12T05:25:41.531763Z  INFO adk_gateway::session_bridge: session backend: InMemory
+2026-05-12T05:25:41.532221Z  INFO adk_gateway::gateway_state: shutdown coordinator initialized drain_timeout_secs=30
+2026-05-12T05:25:41.532516Z  INFO adk_gateway::rag: building RAG pipeline vector_store=InMemory embedding=gemini chunking=FixedSize
+2026-05-12T05:25:41.535192Z  INFO adk_gateway::gateway_state: RAG pipeline initialized
+2026-05-12T05:25:41.535291Z  WARN adk_gateway::skill_loader: cannot read skills directory dir=/Users/jameskaranja/Developer/projects/adk-gateway/.skills error=No such file or directory (os error 2)
+2026-05-12T05:25:41.535541Z  INFO adk_gateway::skill_loader: skill hot-reload: loaded 0 skills and 0 conventions skills_count=0 conventions_count=0
+2026-05-12T05:25:41.535614Z  INFO adk_gateway::gateway_state: skill index built skills=0
+2026-05-12T05:25:41.535891Z  INFO adk_gateway::gateway_state: knowledge graph toolset initialized with 9 operations
+2026-05-12T05:25:41.536329Z  INFO adk_gateway::gateway_state: RAG tools registered: search, hybrid_search, filtered_search
+2026-05-12T05:25:41.537496Z  INFO adk_gateway::gateway_state: loaded persisted agent configs from disk count=1
+2026-05-12T05:25:41.537748Z  INFO adk_gateway::gateway_state: registered 6 agent management tools on system agent
+2026-05-12T05:25:41.537784Z  INFO adk_gateway::awp: AWP protocol disabled
+2026-05-12T05:25:41.537820Z  INFO adk_gateway::gateway_state: built 6 executable agent management tools
+2026-05-12T05:25:41.538212Z  INFO adk_gateway::gateway: attached 6 agent management tools to root agent
+2026-05-12T05:25:41.538377Z  INFO adk_gateway::gateway: restoring paired users from disk count=1
+2026-05-12T05:25:41.540531Z  INFO adk_gateway::config_watcher: config watcher started path=/Users/jameskaranja/.openclaw/openclaw.json
+2026-05-12T05:25:41.540720Z  INFO adk_gateway::channel: telegram channel enabled account_id=default
+2026-05-12T05:25:42.612157Z  INFO adk_gateway::channel::telegram: telegram bot authenticated username=SuzyTestBot
+2026-05-12T05:25:42.612271Z  INFO adk_gateway::gateway: channel started channel=telegram:default
+2026-05-12T05:25:42.612392Z  INFO adk_gateway::channel::telegram: telegram polling started
+2026-05-12T05:25:42.612534Z  INFO adk_gateway::gateway: message processor started
+2026-05-12T05:25:42.613862Z  INFO adk_gateway::gateway: HTTP server listening addr=127.0.0.1:18789
+2026-05-12T05:25:42.613889Z  INFO adk_gateway::gateway: 📊 Control panel: http://127.0.0.1:18789/ui
