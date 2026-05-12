@@ -2,26 +2,23 @@
 
 Multi-channel AI gateway for [adk-rust](https://github.com/zavora-ai/adk-rust) agents. Connects Telegram, Slack, WhatsApp, Discord, Matrix, webhooks, and AI agents to your LLM-powered agents via a single binary — with memory, RAG, access control, a React control panel, and [AWP](https://agenticwebprotocol.com) protocol support.
 
-## Quick Start
+## Install
 
 ```bash
-# Prerequisites: Rust 1.85+, Node.js 18+
-
-# 1. Clone the repo
-git clone https://github.com/zavora-ai/adk-gateway.git
-cd adk-gateway
-
-# 2. Build the React UI
-cd ui && npm install && npm run build && cd ..
-
-# 3. Start the gateway
-cargo run
-
-# 4. Open the control panel
-open http://localhost:18789/ui
+cargo install adk-gateway
 ```
 
-On first run, the UI redirects to a **setup wizard** that walks you through:
+That's it. The control panel UI is embedded in the binary.
+
+## Run
+
+```bash
+adk-gateway
+```
+
+Open http://localhost:18789/ui — the setup wizard guides you through configuration on first run.
+
+The wizard walks you through:
 1. Choosing a model provider (Free Tier, Frontier, or Auto Intelligence)
 2. Setting API keys
 3. Connecting a channel (Telegram, Slack, WhatsApp, Discord, or Matrix)
@@ -114,16 +111,21 @@ adk-gateway pairing generate-code
 ## Development
 
 ```bash
-# Run with verbose logging
+# From source (requires adk-rust as sibling for path deps during dev)
+git clone https://github.com/zavora-ai/adk-rust.git
+git clone https://github.com/zavora-ai/adk-gateway.git
+cd adk-gateway
+
+# Build UI (for development with hot reload)
+cd ui && npm install && npm run dev      # Proxies API to localhost:18789
+
+# Run gateway with verbose logging
 cargo run -- -v
 
 # Run tests
 cargo test --lib                         # 410+ unit tests
 cargo test --test properties             # 30+ property-based tests
 cargo test --test wiring_integration     # Integration tests
-
-# UI development (hot reload, proxies to gateway)
-cd ui && npm run dev
 ```
 
 ## Deployment
