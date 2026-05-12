@@ -344,6 +344,11 @@ impl KnowledgeGraph {
         (entities, relations)
     }
 
+    /// Return all user IDs that have data in the knowledge graph.
+    pub fn user_ids(&self) -> Vec<String> {
+        self.graphs.iter().map(|entry| entry.key().clone()).collect()
+    }
+
     /// Delete the entire knowledge graph for a user (R24.19).
     pub fn delete_user_graph(&self, user_id: &str) -> bool {
         self.graphs.remove(user_id).is_some()

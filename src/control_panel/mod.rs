@@ -438,6 +438,10 @@ pub fn build_routes(state: Arc<ControlPanelState>) -> axum::Router<Arc<ControlPa
             "/ui/api/memory",
             axum::routing::get(api::memory_load).post(api::memory_save),
         )
+        .route(
+            "/ui/api/memory/entities",
+            axum::routing::get(api::memory_entities),
+        )
         // Agents CRUD
         .route(
             "/ui/api/agents",

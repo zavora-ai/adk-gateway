@@ -36,7 +36,7 @@ pub(crate) use super::channels::telegram_probe;
 pub(crate) use super::config_page::config_json;
 pub(crate) use super::dashboard::dashboard_json;
 pub(crate) use super::logs::logs_json;
-pub(crate) use super::memory::{memory_load, memory_save};
+pub(crate) use super::memory::{memory_entities, memory_load, memory_save};
 pub(crate) use super::sessions::sessions_json;
 pub(crate) use super::settings::session_status;
 pub(crate) use super::settings::settings_save;

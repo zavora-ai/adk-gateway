@@ -89,6 +89,7 @@ export const api = {
   // Memory
   loadMemory: () => request<{ content: string; path: string; exists: boolean }>('/memory'),
   saveMemory: (content: string) => request<void>('/memory', { method: 'POST', body: JSON.stringify({ content }) }),
+  memoryEntities: () => request<{ users: Array<{ user_id: string; entity_count: number; relation_count: number; entities: Array<{ name: string; entity_type: string; observations: string[] }>; relations: Array<{ source: string; relation_type: string; target: string }> }> }>('/memory/entities'),
 
   // Agents
   agents: () => request<import('../types').AgentRecord[]>('/agents'),

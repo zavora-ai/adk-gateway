@@ -3,6 +3,62 @@
 use super::ControlPanelState;
 use std::sync::Arc;
 
+/// GET /ui/api/memory/entities — list all KG entities across all users.
+pub(crate) async fn memory_entities(
+    axum::extract::State(state): axum::extract::State<Arc<ControlPanelState>>,
+) -> axum::Json<serde_json::Value> {
+    let kg = match &state.knowledge_graph {
+        Some(kg) => kg,
+        None => {
+            return axum::Json(serde_json::json!({
+                "ok": true,
+                "data": { "users": [] }
+            }));
+        }
+    };
+
+    let user_ids = kg.user_ids();
+    let mut users = Vec::new();
+
+    for uid in &user_ids {
+        let (entities, relations) = kg.read_graph(uid);
+        let entity_data: Vec<serde_json::Value> = entities
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "name": e.name,
+                    "entity_type": e.entity_type,
+                    "observations": e.observations.iter().map(|o| &o.content).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+
+        let relation_data: Vec<serde_json::Value> = relations
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "source": r.source,
+                    "relation_type": r.relation_type,
+                    "target": r.target,
+                })
+            })
+            .collect();
+
+        users.push(serde_json::json!({
+            "user_id": uid,
+            "entity_count": entities.len(),
+            "relation_count": relations.len(),
+            "entities": entity_data,
+            "relations": relation_data,
+        }));
+    }
+
+    axum::Json(serde_json::json!({
+        "ok": true,
+        "data": { "users": users }
+    }))
+}
+
 #[derive(serde::Deserialize)]
 pub(crate) struct MemoryPayload {
     content: String,
