@@ -1,8 +1,54 @@
-//! Channels save API handler.
+//! Channels API handlers (GET + POST).
 
 use super::settings::SettingsResponse;
 use super::ControlPanelState;
 use std::sync::Arc;
+
+/// GET /ui/api/channels — return current channel config with tokens masked.
+pub(crate) async fn channels_get(
+    axum::extract::State(state): axum::extract::State<Arc<ControlPanelState>>,
+) -> axum::Json<serde_json::Value> {
+    let config = state.config.load();
+    let channels = &config.channels;
+
+    axum::Json(serde_json::json!({
+        "ok": true,
+        "data": {
+            "telegram": channels.telegram.as_ref().map(|tg| serde_json::json!({
+                "enabled": tg.enabled,
+                "bot_token": if tg.bot_token.is_empty() { "" } else { "••••••••" },
+                "dm_policy": tg.dm_policy,
+                "stream_mode": tg.stream_mode.as_deref().unwrap_or("partial"),
+            })),
+            "slack": channels.slack.as_ref().map(|sl| serde_json::json!({
+                "enabled": sl.enabled,
+                "bot_token": if sl.bot_token.is_empty() { "" } else { "••••••••" },
+                "app_token": if sl.app_token.is_empty() { "" } else { "••••••••" },
+                "dm_policy": sl.dm_policy,
+            })),
+            "whatsapp": channels.whatsapp.as_ref().map(|wa| serde_json::json!({
+                "enabled": wa.enabled,
+                "phone_number_id": &wa.phone_number_id,
+                "access_token": if wa.access_token.is_empty() { "" } else { "••••••••" },
+                "verify_token": &wa.verify_token,
+                "webhook_path": &wa.webhook_path,
+            })),
+            "discord": channels.discord.as_ref().map(|dc| serde_json::json!({
+                "enabled": dc.enabled,
+                "bot_token": if dc.bot_token.is_empty() { "" } else { "••••••••" },
+                "application_id": &dc.application_id,
+                "guild_ids": &dc.guild_ids,
+            })),
+            "matrix": channels.matrix.as_ref().map(|mx| serde_json::json!({
+                "enabled": mx.enabled,
+                "homeserver_url": &mx.homeserver_url,
+                "access_token": if mx.access_token.is_empty() { "" } else { "••••••••" },
+                "user_id": &mx.user_id,
+                "room_ids": &mx.room_ids,
+            })),
+        }
+    }))
+}
 
 #[derive(serde::Deserialize)]
 pub(crate) struct ChannelsPayload {
@@ -69,6 +115,9 @@ pub(crate) async fn channels_save(
         }
     };
 
+    // Load existing config to preserve tokens when payload sends empty strings
+    let existing_config = state.config.load();
+
     let raw = match std::fs::read_to_string(&config_path) {
         Ok(r) => r,
         Err(e) => {
@@ -99,7 +148,16 @@ pub(crate) async fn channels_save(
     // Telegram
     if let Some(tg) = &payload.telegram {
         if tg.enabled {
-            let token = tg.bot_token.as_deref().unwrap_or("");
+            // Use provided token, or fall back to existing token if empty
+            let token = match tg.bot_token.as_deref() {
+                Some(t) if !t.is_empty() => t.to_string(),
+                _ => existing_config
+                    .channels
+                    .telegram
+                    .as_ref()
+                    .map(|existing| existing.bot_token.clone())
+                    .unwrap_or_default(),
+            };
             if token.is_empty() {
                 return axum::Json(SettingsResponse {
                     ok: false,
@@ -130,8 +188,24 @@ pub(crate) async fn channels_save(
     // Slack
     if let Some(sl) = &payload.slack {
         if sl.enabled {
-            let bot_token = sl.bot_token.as_deref().unwrap_or("");
-            let app_token = sl.app_token.as_deref().unwrap_or("");
+            let bot_token = match sl.bot_token.as_deref() {
+                Some(t) if !t.is_empty() => t.to_string(),
+                _ => existing_config
+                    .channels
+                    .slack
+                    .as_ref()
+                    .map(|existing| existing.bot_token.clone())
+                    .unwrap_or_default(),
+            };
+            let app_token = match sl.app_token.as_deref() {
+                Some(t) if !t.is_empty() => t.to_string(),
+                _ => existing_config
+                    .channels
+                    .slack
+                    .as_ref()
+                    .map(|existing| existing.app_token.clone())
+                    .unwrap_or_default(),
+            };
             if bot_token.is_empty() || app_token.is_empty() {
                 return axum::Json(SettingsResponse {
                     ok: false,
@@ -156,7 +230,15 @@ pub(crate) async fn channels_save(
     if let Some(wa) = &payload.whatsapp {
         if wa.enabled {
             let phone_number_id = wa.phone_number_id.as_deref().unwrap_or("");
-            let access_token = wa.access_token.as_deref().unwrap_or("");
+            let access_token = match wa.access_token.as_deref() {
+                Some(t) if !t.is_empty() => t.to_string(),
+                _ => existing_config
+                    .channels
+                    .whatsapp
+                    .as_ref()
+                    .map(|existing| existing.access_token.clone())
+                    .unwrap_or_default(),
+            };
             if phone_number_id.is_empty() || access_token.is_empty() {
                 return axum::Json(SettingsResponse {
                     ok: false,
@@ -181,7 +263,15 @@ pub(crate) async fn channels_save(
     // Discord
     if let Some(dc) = &payload.discord {
         if dc.enabled {
-            let bot_token = dc.bot_token.as_deref().unwrap_or("");
+            let bot_token = match dc.bot_token.as_deref() {
+                Some(t) if !t.is_empty() => t.to_string(),
+                _ => existing_config
+                    .channels
+                    .discord
+                    .as_ref()
+                    .map(|existing| existing.bot_token.clone())
+                    .unwrap_or_default(),
+            };
             if bot_token.is_empty() {
                 return axum::Json(SettingsResponse {
                     ok: false,
@@ -205,7 +295,15 @@ pub(crate) async fn channels_save(
     if let Some(mx) = &payload.matrix {
         if mx.enabled {
             let homeserver_url = mx.homeserver_url.as_deref().unwrap_or("");
-            let access_token = mx.access_token.as_deref().unwrap_or("");
+            let access_token = match mx.access_token.as_deref() {
+                Some(t) if !t.is_empty() => t.to_string(),
+                _ => existing_config
+                    .channels
+                    .matrix
+                    .as_ref()
+                    .map(|existing| existing.access_token.clone())
+                    .unwrap_or_default(),
+            };
             if homeserver_url.is_empty() || access_token.is_empty() {
                 return axum::Json(SettingsResponse {
                     ok: false,

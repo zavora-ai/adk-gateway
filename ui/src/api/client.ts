@@ -72,6 +72,13 @@ export const api = {
   sessionStatus: () => request<{ backend: string; healthy: boolean; connection_string: string }>('/settings/session-status'),
 
   // Channels
+  getChannels: () => request<{
+    telegram?: { enabled: boolean; bot_token: string; dm_policy: string; stream_mode: string };
+    slack?: { enabled: boolean; bot_token: string; app_token: string; dm_policy: string };
+    whatsapp?: { enabled: boolean; phone_number_id: string; access_token: string; verify_token: string; webhook_path: string };
+    discord?: { enabled: boolean; bot_token: string; application_id: string; guild_ids: string[] };
+    matrix?: { enabled: boolean; homeserver_url: string; access_token: string; user_id: string; room_ids: string[] };
+  }>('/channels'),
   saveChannels: (channels: unknown) => request<void>('/channels', { method: 'POST', body: JSON.stringify(channels) }),
   probeTelegram: () => request<{ status: string; bot_username?: string }>('/channels/telegram/probe', { method: 'POST' }),
 

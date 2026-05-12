@@ -30,6 +30,7 @@ pub(crate) use super::agents::{
     api_agents_configure, api_agents_create, api_agents_delete, api_agents_list, api_agents_logs,
     api_agents_start, api_agents_stop,
 };
+pub(crate) use super::channels::channels_get;
 pub(crate) use super::channels::channels_save;
 pub(crate) use super::channels::telegram_probe;
 pub(crate) use super::config_page::config_json;

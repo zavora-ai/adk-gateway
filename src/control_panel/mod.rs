@@ -423,7 +423,7 @@ pub fn build_routes(state: Arc<ControlPanelState>) -> axum::Router<Arc<ControlPa
             axum::routing::get(api::session_status),
         )
         // Channels
-        .route("/ui/api/channels", axum::routing::post(api::channels_save))
+        .route("/ui/api/channels", axum::routing::get(api::channels_get).post(api::channels_save))
         .route(
             "/ui/api/channels/telegram/probe",
             axum::routing::post(api::telegram_probe),

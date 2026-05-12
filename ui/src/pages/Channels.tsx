@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '../api/client';
 import AlertBanner from '../components/AlertBanner';
 
@@ -48,6 +48,54 @@ export default function Channels() {
   const [saving, setSaving] = useState(false);
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [showNextSteps, setShowNextSteps] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Load existing channel config on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.getChannels();
+        if (res.ok && res.data) {
+          const d = res.data;
+          if (d.telegram) {
+            setTelegramEnabled(d.telegram.enabled);
+            setTelegramDmPolicy(d.telegram.dm_policy || 'open');
+            setTelegramStreamMode(d.telegram.stream_mode || 'partial');
+            // Don't set token — it's masked
+          }
+          if (d.slack) {
+            setSlackEnabled(d.slack.enabled);
+            setSlackDmPolicy(d.slack.dm_policy || 'open');
+            // Don't set tokens — they're masked
+          }
+          if (d.whatsapp) {
+            setWhatsappEnabled(d.whatsapp.enabled);
+            setWhatsappPhoneNumberId(d.whatsapp.phone_number_id || '');
+            setWhatsappVerifyToken(d.whatsapp.verify_token || '');
+            setWhatsappWebhookPath(d.whatsapp.webhook_path || '/webhook/whatsapp');
+            // Don't set access_token — it's masked
+          }
+          if (d.discord) {
+            setDiscordEnabled(d.discord.enabled);
+            setDiscordApplicationId(d.discord.application_id || '');
+            setDiscordGuildIds((d.discord.guild_ids || []).join(', '));
+            // Don't set bot_token — it's masked
+          }
+          if (d.matrix) {
+            setMatrixEnabled(d.matrix.enabled);
+            setMatrixHomeserverUrl(d.matrix.homeserver_url || '');
+            setMatrixUserId(d.matrix.user_id || '');
+            setMatrixRoomIds((d.matrix.room_ids || []).join(', '));
+            // Don't set access_token — it's masked
+          }
+        }
+      } catch {
+        // Silently fail — form starts with defaults
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   const handleTelegramProbe = async () => {
     setTelegramProbing(true);
@@ -149,6 +197,9 @@ export default function Channels() {
         <AlertBanner type={alert.type} message={alert.message} onDismiss={() => setAlert(null)} />
       )}
 
+      {loading ? (
+        <div className="text-sm text-gray-500">Loading channel configuration...</div>
+      ) : (
       <div className="space-y-6 max-w-2xl">
         {/* Telegram */}
         <div className="bg-white rounded-xl shadow-sm p-6">
@@ -488,6 +539,7 @@ export default function Channels() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
