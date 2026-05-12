@@ -16,7 +16,7 @@ pub(crate) async fn memory_load(
         .memory
         .as_ref()
         .map(|m| m.protocol_path.display().to_string())
-        .unwrap_or_else(|| "memory.md".to_string());
+        .unwrap_or_else(|| "context/MEMORY.md".to_string());
 
     let resolved_path = resolve_memory_path(&protocol_path, state.config_path.as_deref());
 
@@ -37,7 +37,7 @@ pub(crate) async fn memory_save(
         .memory
         .as_ref()
         .map(|m| m.protocol_path.display().to_string())
-        .unwrap_or_else(|| "memory.md".to_string());
+        .unwrap_or_else(|| "context/MEMORY.md".to_string());
 
     let resolved_path = resolve_memory_path(&protocol_path, state.config_path.as_deref());
 
@@ -65,16 +65,35 @@ pub(crate) async fn memory_save(
 }
 
 /// Resolve the memory protocol file path.
-/// If the path is absolute, use it directly.
-/// If relative, resolve from the current working directory (where the gateway was started).
-fn resolve_memory_path(protocol_path: &str, _config_path: Option<&std::path::Path>) -> std::path::PathBuf {
+/// Checks multiple locations in order:
+/// 1. Absolute path → use directly
+/// 2. Relative to CWD (project root when started with `cargo run`)
+/// 3. Relative to config file parent (e.g. ~/.openclaw/)
+fn resolve_memory_path(protocol_path: &str, config_path: Option<&std::path::Path>) -> std::path::PathBuf {
     let p = std::path::Path::new(protocol_path);
+
+    // Absolute path — use directly
     if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        // Resolve relative to CWD (where the gateway binary was started)
-        std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join(p)
+        return p.to_path_buf();
     }
+
+    // Try relative to CWD first
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd_path = cwd.join(p);
+    if cwd_path.exists() {
+        return cwd_path;
+    }
+
+    // Try relative to config file parent
+    if let Some(cfg) = config_path {
+        if let Some(parent) = cfg.parent() {
+            let cfg_path = parent.join(p);
+            if cfg_path.exists() {
+                return cfg_path;
+            }
+        }
+    }
+
+    // Default: use CWD-relative (will be created on save)
+    cwd_path
 }

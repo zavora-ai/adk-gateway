@@ -957,7 +957,7 @@ fn default_summary_observations() -> usize {
     10
 }
 fn default_protocol_path() -> PathBuf {
-    PathBuf::from("memory.md")
+    PathBuf::from("context/MEMORY.md")
 }
 fn default_context_dir() -> PathBuf {
     PathBuf::from("context")
