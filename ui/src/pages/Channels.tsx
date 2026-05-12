@@ -224,7 +224,7 @@ export default function Channels() {
                   type="password"
                   value={telegramToken}
                   onChange={(e) => setTelegramToken(e.target.value)}
-                  placeholder="Enter Telegram bot token"
+                  placeholder={telegramEnabled ? "Token configured (leave empty to keep current)" : "Enter Telegram bot token"}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
                 />
               </div>
@@ -253,7 +253,7 @@ export default function Channels() {
                 <button
                   type="button"
                   onClick={handleTelegramProbe}
-                  disabled={telegramProbing || !telegramToken}
+                  disabled={telegramProbing}
                   className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 disabled:opacity-50"
                 >
                   {telegramProbing ? 'Testing...' : 'Test Connection'}
