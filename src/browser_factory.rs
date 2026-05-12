@@ -23,6 +23,7 @@ use crate::tool_registry::ToolEntry;
 /// Configuration for browser automation and computer-use tools per agent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AgentBrowserConfig {
     /// Whether browser automation is enabled for this agent.
     pub enabled: bool,
@@ -42,18 +43,6 @@ pub struct AgentBrowserConfig {
     pub exit_loop_tool: bool,
 }
 
-impl Default for AgentBrowserConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            headless: None,
-            allowed_domains: Vec::new(),
-            timeout: None,
-            computer_use_tools: Vec::new(),
-            exit_loop_tool: false,
-        }
-    }
-}
 
 /// Serde helper for `Option<Duration>` as optional seconds (u64).
 mod optional_duration_secs {

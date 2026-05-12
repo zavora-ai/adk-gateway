@@ -15,6 +15,7 @@ use crate::mcp::McpServerConfig;
 /// Top-level config — mirrors OpenClaw's `openclaw.json` structure.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct GatewayConfig {
     /// Single-agent shorthand
     pub agent: AgentConfig,
@@ -72,29 +73,6 @@ pub struct GatewayConfig {
     pub awp: crate::awp::AwpConfig,
 }
 
-impl Default for GatewayConfig {
-    fn default() -> Self {
-        Self {
-            agent: AgentConfig::default(),
-            agents: AgentsConfig::default(),
-            gateway: ServerSettings::default(),
-            channels: ChannelsConfig::default(),
-            routing: RoutingConfig::default(),
-            session: SessionConfig::default(),
-            hooks: HooksConfig::default(),
-            cron: CronConfig::default(),
-            memory: None,
-            rag: None,
-            auth: None,
-            plugins: vec![],
-            conventions: ConventionConfig::default(),
-            telemetry: TelemetryConfig::default(),
-            graph_workflow: None,
-            mcp_servers: vec![],
-            awp: crate::awp::AwpConfig::default(),
-        }
-    }
-}
 
 // ── Agent ──────────────────────────────────────────────────────────
 
@@ -231,35 +209,35 @@ impl Serialize for CategoryConfig {
         use serde::ser::SerializeMap;
         // Count non-None fields
         let mut count = 1; // primary always present
-        if self.vision.as_ref().map_or(false, |v| !v.is_empty()) {
+        if self.vision.as_ref().is_some_and(|v| !v.is_empty()) {
             count += 1;
         }
-        if self.omni.as_ref().map_or(false, |v| !v.is_empty()) {
+        if self.omni.as_ref().is_some_and(|v| !v.is_empty()) {
             count += 1;
         }
         if self
             .image_generation
             .as_ref()
-            .map_or(false, |v| !v.is_empty())
+            .is_some_and(|v| !v.is_empty())
         {
             count += 1;
         }
-        if self.tts.as_ref().map_or(false, |v| !v.is_empty()) {
+        if self.tts.as_ref().is_some_and(|v| !v.is_empty()) {
             count += 1;
         }
-        if self.stt.as_ref().map_or(false, |v| !v.is_empty()) {
+        if self.stt.as_ref().is_some_and(|v| !v.is_empty()) {
             count += 1;
         }
-        if self.code.as_ref().map_or(false, |v| !v.is_empty()) {
+        if self.code.as_ref().is_some_and(|v| !v.is_empty()) {
             count += 1;
         }
-        if self.embedding.as_ref().map_or(false, |v| !v.is_empty()) {
+        if self.embedding.as_ref().is_some_and(|v| !v.is_empty()) {
             count += 1;
         }
-        if self.search.as_ref().map_or(false, |v| !v.is_empty()) {
+        if self.search.as_ref().is_some_and(|v| !v.is_empty()) {
             count += 1;
         }
-        if self.music.as_ref().map_or(false, |v| !v.is_empty()) {
+        if self.music.as_ref().is_some_and(|v| !v.is_empty()) {
             count += 1;
         }
 
@@ -515,18 +493,15 @@ impl Default for ServerSettings {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum BindMode {
+    #[default]
     Loopback,
     Lan,
     Tailnet,
     Custom(String),
 }
 
-impl Default for BindMode {
-    fn default() -> Self {
-        Self::Loopback
-    }
-}
 
 impl BindMode {
     pub fn to_addr(&self) -> &str {
@@ -783,18 +758,15 @@ impl Default for SlackConfig {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DmPolicy {
+    #[default]
     Pairing,
     Allowlist,
     Open,
     Disabled,
 }
 
-impl Default for DmPolicy {
-    fn default() -> Self {
-        Self::Pairing
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GroupsConfig {

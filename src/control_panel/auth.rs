@@ -44,7 +44,7 @@ pub async fn auth_guard(
     let config = state.config.load();
 
     // Check if auth is required
-    let auth_required = config.auth.as_ref().map_or(false, |auth| {
+    let auth_required = config.auth.as_ref().is_some_and(|auth| {
         matches!(auth.mode, AuthMode::Password | AuthMode::Token)
             && (auth.password.is_some() || auth.token.is_some())
     });

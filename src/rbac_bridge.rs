@@ -153,6 +153,12 @@ pub struct RbacBridge {
     access_control: RwLock<AccessControl>,
 }
 
+impl Default for RbacBridge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RbacBridge {
     pub fn new() -> Self {
         Self {

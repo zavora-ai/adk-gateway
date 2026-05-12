@@ -21,7 +21,7 @@ pub(crate) async fn logs_json(
                     .lines()
                     .rev()
                     .take(200)
-                    .filter_map(|line| parse_log_line(line))
+                    .filter_map(parse_log_line)
                     .collect();
 
                 // Merge: file logs first (older), then in-memory (newer)
