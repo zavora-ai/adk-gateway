@@ -334,7 +334,7 @@ export default function AgentModel() {
   if (loading) {
     return (
       <div>
-        <h2 className="text-2xl font-semibold mb-5">Agent & Model</h2>
+        <h2 className="text-2xl font-semibold mb-5">Model Providers</h2>
         <div className="space-y-4 max-w-3xl animate-pulse">
           {[1, 2, 3].map(i => (
             <div key={i} className="bg-white rounded-xl shadow-sm p-6">
@@ -351,7 +351,7 @@ export default function AgentModel() {
 
   return (
     <div>
-      <h2 className="text-2xl font-semibold mb-5">Agent & Model</h2>
+      <h2 className="text-2xl font-semibold mb-5">Model Providers</h2>
 
       {alert && (
         <AlertBanner type={alert.type} message={alert.message} onDismiss={() => setAlert(null)} />

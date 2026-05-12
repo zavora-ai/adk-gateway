@@ -3,7 +3,7 @@ import { useState } from 'react';
 
 const navItems = [
   { to: '/ui', label: '📊 Dashboard', end: true },
-  { to: '/ui/agent', label: '🤖 Agent & Model' },
+  { to: '/ui/agent', label: '🤖 Model Providers' },
   { to: '/ui/agents', label: '🧩 Agents' },
   { to: '/ui/channels', label: '📡 Channels' },
   { to: '/ui/sessions', label: '👥 Sessions' },
