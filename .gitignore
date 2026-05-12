@@ -58,6 +58,7 @@ tmp/playwright-mcp-output/
 
 # Logs
 *.log
+logs/
 
 # Package manager
 .cargo/
