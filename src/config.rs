@@ -1079,6 +1079,10 @@ pub struct TelemetryConfig {
     pub otel_endpoint: Option<String>,
     #[serde(default, rename = "metricsEnabled")]
     pub metrics_enabled: bool,
+    /// Directory for persistent daily log files. If set, logs are written to
+    /// `{log_dir}/adk-gateway.YYYY-MM-DD.log` with daily rotation.
+    #[serde(default, rename = "logDir")]
+    pub log_dir: Option<String>,
 }
 
 impl Default for TelemetryConfig {
@@ -1087,6 +1091,7 @@ impl Default for TelemetryConfig {
             log_format: LogFormat::Text,
             otel_endpoint: None,
             metrics_enabled: false,
+            log_dir: None,
         }
     }
 }

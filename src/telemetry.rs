@@ -126,6 +126,7 @@ pub fn redact_config(value: &serde_json::Value) -> serde_json::Value {
 pub struct TelemetrySetup {
     pub json_format: bool,
     pub otel_endpoint: Option<String>,
+    pub log_dir: Option<String>,
 }
 
 impl TelemetrySetup {
@@ -133,26 +134,52 @@ impl TelemetrySetup {
         Self {
             json_format: matches!(config.log_format, crate::config::LogFormat::Json),
             otel_endpoint: config.otel_endpoint.clone(),
+            log_dir: config.log_dir.clone(),
         }
     }
 
     /// Initialize the tracing subscriber based on the telemetry configuration.
     ///
-    /// Configures JSON or text format logging based on `json_format`, and
-    /// applies the given `EnvFilter` for log level control.
+    /// Configures JSON or text format logging, applies the given `EnvFilter`,
+    /// and optionally adds a daily-rotating file appender.
     pub fn init(&self, filter: tracing_subscriber::EnvFilter) {
         use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-        if self.json_format {
-            tracing_subscriber::registry()
-                .with(filter)
-                .with(fmt::layer().json().with_target(true))
-                .init();
+        // Build the file layer if log_dir is configured
+        let file_guard = if let Some(ref log_dir) = self.log_dir {
+            std::fs::create_dir_all(log_dir).ok();
+            let file_appender =
+                tracing_appender::rolling::daily(log_dir, "adk-gateway.log");
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            // Store the guard in a leaked Box to keep it alive for the process lifetime
+            Box::leak(Box::new(guard));
+            Some(non_blocking)
         } else {
-            tracing_subscriber::registry()
+            None
+        };
+
+        if self.json_format {
+            let registry = tracing_subscriber::registry()
                 .with(filter)
-                .with(fmt::layer().with_target(true))
-                .init();
+                .with(fmt::layer().json().with_target(true));
+            if let Some(writer) = file_guard {
+                registry
+                    .with(fmt::layer().json().with_target(true).with_writer(writer))
+                    .init();
+            } else {
+                registry.init();
+            }
+        } else {
+            let registry = tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt::layer().with_target(true));
+            if let Some(writer) = file_guard {
+                registry
+                    .with(fmt::layer().with_target(true).with_ansi(false).with_writer(writer))
+                    .init();
+            } else {
+                registry.init();
+            }
         }
     }
 
@@ -163,7 +190,11 @@ impl TelemetrySetup {
             Some(ep) => format!("enabled ({})", ep),
             None => "disabled".to_string(),
         };
-        format!("log_format={format}, otel={otel}")
+        let file = match &self.log_dir {
+            Some(dir) => format!("daily rotation in {}", dir),
+            None => "disabled".to_string(),
+        };
+        format!("log_format={format}, otel={otel}, file_logs={file}")
     }
 }
 
