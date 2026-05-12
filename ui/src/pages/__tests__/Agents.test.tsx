@@ -24,25 +24,6 @@ const { mockRefetch, mockState } = vi.hoisted(() => ({
   },
 }));
 
-const agentData = [
-  {
-    id: 'agent-1',
-    name: 'Test Agent',
-    description: 'A test agent',
-    agent_type: 'a2a',
-    state: 'stopped',
-    port: null,
-    model: 'gpt-4o',
-    tools: ['web_search'],
-    instruction: 'You are a helpful assistant.',
-    api_key_env: 'OPENAI_API_KEY',
-    auto_start: false,
-    channel_bindings: [{ channel_type: 'slack', account_id: 'C12345' }],
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-  },
-];
-
 vi.mock('../../hooks/useApi', () => ({
   useApi: () => ({
     data: [
