@@ -39,6 +39,7 @@ adk-awp = "0.8"
 
 # Embedded UI assets
 rust-embed = { version = "8", features = ["mime-guess"] }
+mime_guess = "2"
 
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
@@ -145,3 +146,23 @@ optional = true
 tempfile = "3"
 proptest = "1"
 wiremock = "0.6"
+
+# Local development overrides — remove before `cargo publish`
+[patch.crates-io]
+adk-core = { path = "../adk-rust/adk-core" }
+adk-agent = { path = "../adk-rust/adk-agent" }
+adk-runner = { path = "../adk-rust/adk-runner" }
+adk-session = { path = "../adk-rust/adk-session" }
+adk-server = { path = "../adk-rust/adk-server" }
+adk-artifact = { path = "../adk-rust/adk-artifact" }
+adk-model = { path = "../adk-rust/adk-model" }
+adk-tool = { path = "../adk-rust/adk-tool" }
+adk-skill = { path = "../adk-rust/adk-skill" }
+adk-plugin = { path = "../adk-rust/adk-plugin" }
+adk-telemetry = { path = "../adk-rust/adk-telemetry" }
+adk-auth = { path = "../adk-rust/adk-auth" }
+adk-graph = { path = "../adk-rust/adk-graph" }
+adk-memory = { path = "../adk-rust/adk-memory" }
+adk-browser = { path = "../adk-rust/adk-browser" }
+awp-types = { path = "../adk-rust/awp-types" }
+adk-awp = { path = "../adk-rust/adk-awp" }

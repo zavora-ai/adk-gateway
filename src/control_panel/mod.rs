@@ -5,6 +5,8 @@
 //!
 //! Design: ControlPanel [R5.1–R5.7, R12.4, R24.20, R25.10]
 
+use axum::response::IntoResponse;
+
 pub mod agent_setup;
 pub mod agents;
 pub mod api;
@@ -505,13 +507,55 @@ pub fn build_routes(state: Arc<ControlPanelState>) -> axum::Router<Arc<ControlPa
             auth::auth_guard,
         ));
 
-    // SPA fallback: serve ui/dist/ for all /ui/* routes, falling back to index.html
-    let spa = tower_http::services::ServeDir::new("ui/dist")
-        .not_found_service(tower_http::services::ServeFile::new("ui/dist/index.html"));
+    // SPA fallback: serve embedded UI assets for all /ui/* routes.
+    // When built with `ui/dist/` present, assets are compiled into the binary.
+    // Falls back to index.html for client-side routing (React SPA).
+    let spa = axum::Router::new()
+        .fallback(embedded_ui_handler);
 
     public_routes
         .merge(protected_routes)
         .nest_service("/ui", spa)
+}
+
+// ── Embedded UI Assets ─────────────────────────────────────────────
+
+#[derive(rust_embed::Embed)]
+#[folder = "ui/dist/"]
+#[prefix = ""]
+struct UiAssets;
+
+/// Serve embedded UI assets, falling back to index.html for SPA routing.
+async fn embedded_ui_handler(
+    uri: axum::http::Uri,
+) -> impl axum::response::IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+
+    // Try to serve the exact file
+    if let Some(file) = UiAssets::get(path) {
+        let mime = mime_guess::from_path(path)
+            .first_or_octet_stream()
+            .to_string();
+        return (
+            [(axum::http::header::CONTENT_TYPE, mime)],
+            file.data.to_vec(),
+        )
+            .into_response();
+    }
+
+    // SPA fallback: serve index.html for all unmatched routes
+    match UiAssets::get("index.html") {
+        Some(index) => (
+            [(axum::http::header::CONTENT_TYPE, "text/html".to_string())],
+            index.data.to_vec(),
+        )
+            .into_response(),
+        None => (
+            axum::http::StatusCode::NOT_FOUND,
+            "UI not found. Build with: cd ui && npm run build",
+        )
+            .into_response(),
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
