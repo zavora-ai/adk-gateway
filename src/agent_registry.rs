@@ -134,6 +134,20 @@ impl AgentRegistry {
         Ok(())
     }
 
+    /// Force-set an agent's state without transition validation.
+    /// Used on startup to fix stale states from unclean shutdowns.
+    pub fn force_state(&self, id: &str, new_state: LifecycleState) -> Result<()> {
+        let mut entry = self
+            .agents
+            .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("agent '{}' not found", id))?;
+
+        entry.state = new_state;
+        entry.updated_at = Utc::now();
+        self.persist(id, &entry)?;
+        Ok(())
+    }
+
     /// Update an agent's config and persist.
     pub fn update_config(&self, id: &str, config: AgentConfig) -> Result<()> {
         let mut entry = self

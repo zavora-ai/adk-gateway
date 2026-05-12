@@ -435,6 +435,27 @@ pub async fn build(
         }
     }
 
+    // Fix stale states on boot: system agent is always Running,
+    // and any agents stuck in Starting/Stopping are reset to their
+    // stable state (Stopped) since processes don't survive restarts.
+    {
+        use crate::agent_config::LifecycleState;
+        let all_agents = agent_registry.list();
+        for (id, record) in &all_agents {
+            match &record.state {
+                _ if id == "system" && record.state != LifecycleState::Running => {
+                    let _ = agent_registry.force_state(id, LifecycleState::Running);
+                    tracing::debug!(agent_id = %id, "system agent state set to Running");
+                }
+                LifecycleState::Starting | LifecycleState::Stopping => {
+                    let _ = agent_registry.force_state(id, LifecycleState::Stopped);
+                    tracing::info!(agent_id = %id, old_state = ?record.state, "reset stale transitioning agent to Stopped");
+                }
+                _ => {}
+            }
+        }
+    }
+
     // Register the 6 agent management tools in the tool registry
     let agent_mgmt_tools = [
         (
