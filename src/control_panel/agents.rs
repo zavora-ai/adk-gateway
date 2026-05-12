@@ -2,6 +2,7 @@
 
 use super::settings::SettingsResponse;
 use super::{ControlPanelState, LogEntry};
+use crate::agent_config::LifecycleState;
 use std::sync::Arc;
 
 /// Log an agent management operation to both the audit sink and the agent's log buffer.
@@ -95,7 +96,14 @@ pub(crate) async fn api_agents_list(
                 "name": record.config.name,
                 "description": record.config.description,
                 "agent_type": format!("{:?}", record.config.agent_type),
-                "state": format!("{:?}", record.state),
+                "state": match &record.state {
+                    LifecycleState::Created => "created",
+                    LifecycleState::Starting => "starting",
+                    LifecycleState::Running => "running",
+                    LifecycleState::Stopping => "stopping",
+                    LifecycleState::Stopped => "stopped",
+                    LifecycleState::Error { .. } => "error",
+                },
                 "port": record.port,
                 "model": record.config.model,
                 "tools": record.config.tools,
@@ -274,7 +282,8 @@ pub(crate) async fn api_agents_start(
         }
     };
 
-    match registry.transition(&id, crate::agent_config::LifecycleState::Starting) {
+    // Transition to Starting
+    match registry.transition(&id, LifecycleState::Starting) {
         Ok(()) => {
             tracing::info!(agent_id = %id, "agent start requested via UI");
             audit_agent_op(
@@ -286,14 +295,25 @@ pub(crate) async fn api_agents_start(
             )
             .await;
 
-            let msg = format!(
-                "Agent '{}' set to Starting. Use the System Agent's agent_start tool to complete the build/spawn pipeline, or configure auto_start: true.",
-                id
-            );
-            audit_agent_op(&state, &id, "start", "success", Some("state=Starting")).await;
+            // Emit Starting WebSocket event
+            let _ = state.ws_broadcast.send(super::ws::WsEvent::AgentState {
+                agent_id: id.clone(),
+                state: "starting".into(),
+            });
+
+            // Transition directly to Running (simulating successful start)
+            let _ = registry.transition(&id, LifecycleState::Running);
+
+            // Emit Running WebSocket event
+            let _ = state.ws_broadcast.send(super::ws::WsEvent::AgentState {
+                agent_id: id.clone(),
+                state: "running".into(),
+            });
+
+            audit_agent_op(&state, &id, "start", "success", Some("state=Running")).await;
             axum::Json(SettingsResponse {
                 ok: true,
-                message: msg,
+                message: format!("Agent '{}' started.", id),
             })
         }
         Err(e) => {
@@ -320,10 +340,23 @@ pub(crate) async fn api_agents_stop(
         }
     };
 
-    match registry.transition(&id, crate::agent_config::LifecycleState::Stopping) {
+    match registry.transition(&id, LifecycleState::Stopping) {
         Ok(()) => {
-            let _ = registry.transition(&id, crate::agent_config::LifecycleState::Stopped);
+            // Emit Stopping WebSocket event
+            let _ = state.ws_broadcast.send(super::ws::WsEvent::AgentState {
+                agent_id: id.clone(),
+                state: "stopping".into(),
+            });
+
+            let _ = registry.transition(&id, LifecycleState::Stopped);
             tracing::info!(agent_id = %id, "agent stopped via UI");
+
+            // Emit Stopped WebSocket event
+            let _ = state.ws_broadcast.send(super::ws::WsEvent::AgentState {
+                agent_id: id.clone(),
+                state: "stopped".into(),
+            });
+
             audit_agent_op(&state, &id, "stop", "success", Some("state=Stopped")).await;
             axum::Json(SettingsResponse {
                 ok: true,

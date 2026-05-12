@@ -428,7 +428,11 @@ function AgentRow({
   onLogs: () => void;
   onConfigure: () => void;
 }) {
-  const isRunning = agent.state === 'running';
+  const state = agent.state.toLowerCase();
+  const isSystem = agent.id === 'system';
+  const isRunning = state === 'running';
+  const isTransitioning = state === 'starting' || state === 'stopping';
+  const canStart = state === 'created' || state === 'stopped' || state === 'error';
 
   return (
     <>
@@ -436,27 +440,48 @@ function AgentRow({
         className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer"
         onClick={onToggle}
       >
-        <td className="px-4 py-3 text-sm font-medium">{agent.name}</td>
+        <td className="px-4 py-3 text-sm font-medium">
+          <span className="flex items-center gap-2">
+            {agent.name}
+            {isSystem && (
+              <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-100 text-indigo-700 uppercase tracking-wide">
+                System
+              </span>
+            )}
+          </span>
+        </td>
         <td className="px-4 py-3 text-sm font-mono text-gray-500">{agent.id}</td>
         <td className="px-4 py-3"><StatusBadge status={agent.state} /></td>
         <td className="px-4 py-3 text-sm text-gray-500">{agent.port ?? '—'}</td>
         <td className="px-4 py-3 text-sm text-gray-600">{agent.model}</td>
         <td className="px-4 py-3">
           <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-            {isRunning ? (
-              <button
-                onClick={onStop}
-                className="px-3 py-1 text-xs font-medium text-yellow-700 bg-yellow-50 rounded-lg hover:bg-yellow-100"
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                onClick={onStart}
-                className="px-3 py-1 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100"
-              >
-                Start
-              </button>
+            {!isSystem && (
+              <>
+                {isTransitioning ? (
+                  <span className="px-3 py-1 text-xs font-medium text-gray-500 bg-gray-100 rounded-lg inline-flex items-center gap-1">
+                    <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    {state === 'starting' ? 'Starting…' : 'Stopping…'}
+                  </span>
+                ) : isRunning ? (
+                  <button
+                    onClick={onStop}
+                    className="px-3 py-1 text-xs font-medium text-yellow-700 bg-yellow-50 rounded-lg hover:bg-yellow-100"
+                  >
+                    Stop
+                  </button>
+                ) : canStart ? (
+                  <button
+                    onClick={onStart}
+                    className="px-3 py-1 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100"
+                  >
+                    Start
+                  </button>
+                ) : null}
+              </>
             )}
             <button
               onClick={onConfigure}
@@ -470,12 +495,14 @@ function AgentRow({
             >
               Logs
             </button>
-            <button
-              onClick={onDelete}
-              className="px-3 py-1 text-xs font-medium text-red-700 bg-red-50 rounded-lg hover:bg-red-100"
-            >
-              Delete
-            </button>
+            {!isSystem && (
+              <button
+                onClick={onDelete}
+                className="px-3 py-1 text-xs font-medium text-red-700 bg-red-50 rounded-lg hover:bg-red-100"
+              >
+                Delete
+              </button>
+            )}
           </div>
         </td>
       </tr>
