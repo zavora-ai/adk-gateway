@@ -320,9 +320,10 @@ pub async fn awp_summary(
         Some(s) => s,
         None => {
             return (
-                StatusCode::NOT_FOUND,
+                StatusCode::OK,
                 Json(serde_json::json!({
-                    "ok": false,
+                    "ok": true,
+                    "data": null,
                     "message": "AWP is not enabled"
                 })),
             );
