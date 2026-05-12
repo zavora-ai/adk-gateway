@@ -1218,9 +1218,23 @@ pub fn default_config_path() -> PathBuf {
 }
 
 /// Load and parse JSON5 config with env var substitution.
+/// If the config file doesn't exist, creates it with sensible defaults.
 pub fn load_config(path: &Path) -> anyhow::Result<GatewayConfig> {
     if !path.exists() {
-        tracing::warn!(?path, "config file not found, using defaults");
+        tracing::info!(?path, "config file not found, creating with defaults");
+        // Create the directory and a minimal config file
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        let default_config = serde_json::json!({
+            "agent": { "model": { "primary": "google/gemini-2.5-pro" } },
+            "gateway": { "port": 18789, "bind": "loopback" },
+            "telemetry": { "logDir": "logs" }
+        });
+        let json = serde_json::to_string_pretty(&default_config).unwrap_or_default();
+        if let Err(e) = std::fs::write(path, &json) {
+            tracing::warn!(?path, error = %e, "failed to create default config file");
+        }
         return Ok(GatewayConfig::default());
     }
 
