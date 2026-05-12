@@ -194,6 +194,14 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
         .await?,
     );
 
+    // Update system agent's instruction in the registry to reflect the full composed prompt
+    if let Some(entry) = state.agent_registry.get("system") {
+        let mut sys_config = entry.config.clone();
+        drop(entry);
+        sys_config.instruction = full_instruction.clone();
+        let _ = state.agent_registry.update_config("system", sys_config);
+    }
+
     // ── Attach agent management tools to the root agent ────────────
     // The management tools require subsystem references that are only available
     // after gateway_state::build(). We rebuild the root agent with them attached.
