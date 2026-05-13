@@ -110,6 +110,9 @@ export const api = {
 
   // Integrations
   mcpServers: () => request<import('../types').McpServerInfo[]>('/integrations/mcp'),
+  addMcpServer: (server: unknown) => request<void>('/integrations/mcp', { method: 'POST', body: JSON.stringify(server) }),
+  removeMcpServer: (id: string) => request<void>(`/integrations/mcp/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  toggleMcpServer: (id: string) => request<void>(`/integrations/mcp/${encodeURIComponent(id)}/toggle`, { method: 'POST' }),
   cronJobs: () => request<{ jobs: import('../types').CronJobInfo[]; total: number }>('/integrations/cron'),
   tools: () => request<{ tools: import('../types').ToolInfo[]; total: number }>('/integrations/tools'),
 

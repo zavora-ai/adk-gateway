@@ -903,6 +903,7 @@ async fn e2e_mcp_connection_lifecycle() {
         transport: McpTransport::Stdio {
             command: "npx".into(),
             args: vec!["code-mcp".into()],
+            env: std::collections::HashMap::new(),
         },
         auth: None,
         enabled: true,
@@ -930,6 +931,7 @@ async fn e2e_mcp_reconciliation() {
             transport: McpTransport::Stdio {
                 command: "cmd-a".into(),
                 args: vec![],
+                env: std::collections::HashMap::new(),
             },
             enabled: true,
             auth: None,

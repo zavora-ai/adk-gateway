@@ -486,7 +486,15 @@ pub fn build_routes(state: Arc<ControlPanelState>) -> axum::Router<Arc<ControlPa
         // Integrations endpoints
         .route(
             "/ui/api/integrations/mcp",
-            axum::routing::get(api::integrations_mcp),
+            axum::routing::get(api::integrations_mcp).post(api::mcp_add),
+        )
+        .route(
+            "/ui/api/integrations/mcp/{id}",
+            axum::routing::delete(api::mcp_remove),
+        )
+        .route(
+            "/ui/api/integrations/mcp/{id}/toggle",
+            axum::routing::post(api::mcp_toggle),
         )
         .route(
             "/ui/api/integrations/cron",

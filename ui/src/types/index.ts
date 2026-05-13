@@ -101,6 +101,12 @@ export interface AwpHealthState {
 export interface McpServerInfo {
   server_id: string;
   transport?: string;
+  transport_detail?: {
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+  };
   status: string;
   enabled?: boolean;
   tools?: string[];

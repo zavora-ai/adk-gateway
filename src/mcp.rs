@@ -43,8 +43,11 @@ pub enum McpTransport {
         command: String,
         #[serde(default)]
         args: Vec<String>,
+        #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+        env: std::collections::HashMap<String, String>,
     },
     /// SSE/HTTP-based transport: connect to a URL.
+    #[serde(alias = "http")]
     Sse { url: String },
 }
 
@@ -168,12 +171,12 @@ impl McpConnectionManager {
         let mut conn = McpConnection::new(config.clone());
 
         match &config.transport {
-            McpTransport::Stdio { command, args } => {
+            McpTransport::Stdio { command, args, env } => {
                 // Convert our config to adk-tool's McpServerConfig format
                 let adk_config = adk_tool::mcp::McpServerConfig {
                     command: command.clone(),
                     args: args.clone(),
-                    env: std::collections::HashMap::new(),
+                    env: env.clone(),
                     disabled: false,
                     auto_approve: vec![],
                     restart_policy: None,
@@ -405,6 +408,7 @@ mod tests {
             transport: McpTransport::Stdio {
                 command: "mcp-server".to_string(),
                 args: vec!["--port".to_string(), "8080".to_string()],
+                env: std::collections::HashMap::new(),
             },
             auth: None,
             enabled: true,
@@ -709,6 +713,7 @@ mod tests {
             transport: McpTransport::Stdio {
                 command: "npx".to_string(),
                 args: vec!["-y".to_string(), "@mcp/server".to_string()],
+                env: std::collections::HashMap::new(),
             },
             auth: None,
             enabled: true,

@@ -106,6 +106,10 @@ enum Commands {
     /// DM pairing management
     #[command(subcommand)]
     Pairing(PairingCommands),
+
+    /// MCP server management
+    #[command(subcommand)]
+    Mcp(McpCommands),
 }
 
 #[derive(Subcommand)]
@@ -150,6 +154,38 @@ enum RagCommands {
 enum PairingCommands {
     /// Generate a new pairing code
     GenerateCode,
+}
+
+#[derive(Subcommand)]
+enum McpCommands {
+    /// Add an MCP server
+    Add {
+        /// Server name/ID
+        #[arg(long)]
+        name: String,
+        /// Command to run (for stdio transport)
+        #[arg(long)]
+        command: Option<String>,
+        /// Arguments for the command
+        #[arg(long)]
+        args: Vec<String>,
+        /// Environment variables (KEY=VALUE format)
+        #[arg(long)]
+        env: Vec<String>,
+        /// URL for HTTP/SSE transport
+        #[arg(long)]
+        url: Option<String>,
+        /// Disable the server (default: enabled)
+        #[arg(long)]
+        disabled: bool,
+    },
+    /// Remove an MCP server
+    Remove {
+        /// Server name/ID to remove
+        name: String,
+    },
+    /// List configured MCP servers
+    List,
 }
 
 #[tokio::main]
@@ -268,8 +304,102 @@ async fn main() -> anyhow::Result<()> {
                 println!("{code}");
             }
         },
+        Some(Commands::Mcp(mcp_cmd)) => {
+            handle_mcp_command(mcp_cmd, &config_path, &cfg)?;
+        },
     }
 
+    Ok(())
+}
+
+/// Handle MCP subcommands: add, remove, list.
+fn handle_mcp_command(
+    cmd: McpCommands,
+    config_path: &std::path::Path,
+    cfg: &config::GatewayConfig,
+) -> anyhow::Result<()> {
+    match cmd {
+        McpCommands::Add {
+            name,
+            command,
+            args,
+            env,
+            url,
+            disabled,
+        } => {
+            // Determine transport
+            let transport = if let Some(cmd_str) = command {
+                let env_map: std::collections::HashMap<String, String> = env
+                    .iter()
+                    .filter_map(|e| {
+                        let parts: Vec<&str> = e.splitn(2, '=').collect();
+                        if parts.len() == 2 {
+                            Some((parts[0].to_string(), parts[1].to_string()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                mcp::McpTransport::Stdio {
+                    command: cmd_str,
+                    args,
+                    env: env_map,
+                }
+            } else if let Some(url_str) = url {
+                mcp::McpTransport::Sse { url: url_str }
+            } else {
+                anyhow::bail!("either --command or --url must be provided");
+            };
+
+            let new_server = mcp::McpServerConfig {
+                server_id: name.clone(),
+                transport,
+                auth: None,
+                enabled: !disabled,
+            };
+
+            // Update config
+            let mut updated_cfg = cfg.clone();
+            // Remove existing entry with same name if present
+            updated_cfg.mcp_servers.retain(|s| s.server_id != name);
+            updated_cfg.mcp_servers.push(new_server);
+
+            // Write back
+            let output = serde_json::to_string_pretty(&updated_cfg)?;
+            std::fs::write(config_path, &output)?;
+
+            println!("Added MCP server '{name}'");
+        }
+        McpCommands::Remove { name } => {
+            let mut updated_cfg = cfg.clone();
+            let before = updated_cfg.mcp_servers.len();
+            updated_cfg.mcp_servers.retain(|s| s.server_id != name);
+
+            if updated_cfg.mcp_servers.len() == before {
+                println!("MCP server '{name}' not found");
+            } else {
+                let output = serde_json::to_string_pretty(&updated_cfg)?;
+                std::fs::write(config_path, &output)?;
+                println!("Removed MCP server '{name}'");
+            }
+        }
+        McpCommands::List => {
+            if cfg.mcp_servers.is_empty() {
+                println!("No MCP servers configured");
+            } else {
+                println!("{:<20} {:<10} {:<10}", "SERVER ID", "TRANSPORT", "ENABLED");
+                println!("{}", "-".repeat(42));
+                for server in &cfg.mcp_servers {
+                    let transport_type = match &server.transport {
+                        mcp::McpTransport::Stdio { .. } => "stdio",
+                        mcp::McpTransport::Sse { .. } => "sse",
+                    };
+                    let enabled = if server.enabled { "yes" } else { "no" };
+                    println!("{:<20} {:<10} {:<10}", server.server_id, transport_type, enabled);
+                }
+            }
+        }
+    }
     Ok(())
 }
 

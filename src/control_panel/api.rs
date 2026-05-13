@@ -520,30 +520,59 @@ pub async fn awp_consent(
 
 // ── Integrations endpoints ─────────────────────────────────────────
 
-/// GET /ui/api/integrations/mcp — MCP server status from mcp_manager.
+/// GET /ui/api/integrations/mcp — MCP server status from config + mcp_manager.
 pub async fn integrations_mcp(
     State(state): State<Arc<ControlPanelState>>,
 ) -> Json<serde_json::Value> {
-    let servers = match &state.mcp_manager {
-        Some(mgr) => {
-            let ids = mgr.server_ids();
-            ids.iter()
-                .map(|id| {
-                    let status = mgr
-                        .get_status(id)
-                        .map(|s| format!("{:?}", s))
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let tools = mgr.discovered_tools(id);
-                    serde_json::json!({
-                        "server_id": id,
-                        "status": status,
-                        "discovered_tools": tools,
-                    })
-                })
-                .collect::<Vec<_>>()
-        }
-        None => vec![],
-    };
+    let config = state.config.load();
+    let servers: Vec<serde_json::Value> = config
+        .mcp_servers
+        .iter()
+        .map(|srv| {
+            let (transport_type, transport_detail) = match &srv.transport {
+                crate::mcp::McpTransport::Stdio { command, args, env } => {
+                    let detail = serde_json::json!({
+                        "command": command,
+                        "args": args,
+                        "env": env,
+                    });
+                    ("stdio", detail)
+                }
+                crate::mcp::McpTransport::Sse { url } => {
+                    let detail = serde_json::json!({ "url": url });
+                    ("sse", detail)
+                }
+            };
+
+            let status = state
+                .mcp_manager
+                .as_ref()
+                .and_then(|mgr| mgr.get_status(&srv.server_id))
+                .map(|s| format!("{:?}", s))
+                .unwrap_or_else(|| {
+                    if srv.enabled {
+                        "Disconnected".to_string()
+                    } else {
+                        "Disabled".to_string()
+                    }
+                });
+
+            let tools = state
+                .mcp_manager
+                .as_ref()
+                .map(|mgr| mgr.discovered_tools(&srv.server_id))
+                .unwrap_or_default();
+
+            serde_json::json!({
+                "server_id": srv.server_id,
+                "transport": transport_type,
+                "transport_detail": transport_detail,
+                "enabled": srv.enabled,
+                "status": status,
+                "discovered_tools": tools,
+            })
+        })
+        .collect();
 
     Json(serde_json::json!({
         "ok": true,
@@ -625,4 +654,239 @@ fn extract_cookie<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+// ── MCP management endpoints ───────────────────────────────────────
+
+/// Request body for adding/updating an MCP server.
+#[derive(serde::Deserialize)]
+pub struct AddMcpServerPayload {
+    pub server_id: String,
+    #[serde(default = "default_stdio")]
+    pub transport: String,
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    pub url: Option<String>,
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+fn default_stdio() -> String {
+    "stdio".to_string()
+}
+
+/// POST /ui/api/integrations/mcp — Add or update an MCP server in config.
+pub async fn mcp_add(
+    State(state): State<Arc<ControlPanelState>>,
+    Json(payload): Json<AddMcpServerPayload>,
+) -> Json<serde_json::Value> {
+    use crate::mcp::{McpServerConfig, McpTransport};
+
+    let transport = match payload.transport.as_str() {
+        "stdio" => {
+            let command = match payload.command {
+                Some(c) => c,
+                None => {
+                    return Json(serde_json::json!({
+                        "ok": false,
+                        "message": "command is required for stdio transport"
+                    }));
+                }
+            };
+            McpTransport::Stdio {
+                command,
+                args: payload.args,
+                env: payload.env,
+            }
+        }
+        "http" | "sse" => {
+            let url = match payload.url {
+                Some(u) => u,
+                None => {
+                    return Json(serde_json::json!({
+                        "ok": false,
+                        "message": "url is required for http/sse transport"
+                    }));
+                }
+            };
+            McpTransport::Sse { url }
+        }
+        other => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": format!("unknown transport type: {other}")
+            }));
+        }
+    };
+
+    let new_server = McpServerConfig {
+        server_id: payload.server_id.clone(),
+        transport,
+        auth: None,
+        enabled: !payload.disabled,
+    };
+
+    // Update config
+    let config_path = match &state.config_path {
+        Some(p) => p.clone(),
+        None => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": "Config file path not configured"
+            }));
+        }
+    };
+
+    let mut cfg = state.config.load().as_ref().clone();
+    cfg.mcp_servers.retain(|s| s.server_id != payload.server_id);
+    cfg.mcp_servers.push(new_server);
+
+    // Write to disk
+    let output = match serde_json::to_string_pretty(&cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": format!("Failed to serialize config: {e}")
+            }));
+        }
+    };
+
+    if let Err(e) = std::fs::write(&config_path, &output) {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Failed to write config: {e}")
+        }));
+    }
+
+    // Hot-reload: update in-memory config and reconcile MCP connections
+    state.config.store(std::sync::Arc::new(cfg.clone()));
+    if let Some(mgr) = &state.mcp_manager {
+        mgr.reconcile(&cfg.mcp_servers).await;
+    }
+
+    tracing::info!(server_id = %payload.server_id, "MCP server added via API");
+
+    Json(serde_json::json!({
+        "ok": true,
+        "message": format!("MCP server '{}' added.", payload.server_id)
+    }))
+}
+
+/// DELETE /ui/api/integrations/mcp/:id — Remove an MCP server from config.
+pub async fn mcp_remove(
+    State(state): State<Arc<ControlPanelState>>,
+    Path(server_id): Path<String>,
+) -> Json<serde_json::Value> {
+    let config_path = match &state.config_path {
+        Some(p) => p.clone(),
+        None => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": "Config file path not configured"
+            }));
+        }
+    };
+
+    let mut cfg = state.config.load().as_ref().clone();
+    let before = cfg.mcp_servers.len();
+    cfg.mcp_servers.retain(|s| s.server_id != server_id);
+
+    if cfg.mcp_servers.len() == before {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("MCP server '{}' not found.", server_id)
+        }));
+    }
+
+    let output = match serde_json::to_string_pretty(&cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": format!("Failed to serialize config: {e}")
+            }));
+        }
+    };
+
+    if let Err(e) = std::fs::write(&config_path, &output) {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Failed to write config: {e}")
+        }));
+    }
+
+    state.config.store(std::sync::Arc::new(cfg.clone()));
+    if let Some(mgr) = &state.mcp_manager {
+        mgr.reconcile(&cfg.mcp_servers).await;
+    }
+
+    tracing::info!(server_id = %server_id, "MCP server removed via API");
+
+    Json(serde_json::json!({
+        "ok": true,
+        "message": format!("MCP server '{}' removed.", server_id)
+    }))
+}
+
+/// POST /ui/api/integrations/mcp/:id/toggle — Enable/disable an MCP server.
+pub async fn mcp_toggle(
+    State(state): State<Arc<ControlPanelState>>,
+    Path(server_id): Path<String>,
+) -> Json<serde_json::Value> {
+    let config_path = match &state.config_path {
+        Some(p) => p.clone(),
+        None => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": "Config file path not configured"
+            }));
+        }
+    };
+
+    let mut cfg = state.config.load().as_ref().clone();
+    let server = cfg.mcp_servers.iter_mut().find(|s| s.server_id == server_id);
+
+    match server {
+        Some(srv) => {
+            srv.enabled = !srv.enabled;
+            let new_state = if srv.enabled { "enabled" } else { "disabled" };
+
+            let output = match serde_json::to_string_pretty(&cfg) {
+                Ok(s) => s,
+                Err(e) => {
+                    return Json(serde_json::json!({
+                        "ok": false,
+                        "message": format!("Failed to serialize config: {e}")
+                    }));
+                }
+            };
+
+            if let Err(e) = std::fs::write(&config_path, &output) {
+                return Json(serde_json::json!({
+                    "ok": false,
+                    "message": format!("Failed to write config: {e}")
+                }));
+            }
+
+            state.config.store(std::sync::Arc::new(cfg.clone()));
+            if let Some(mgr) = &state.mcp_manager {
+                mgr.reconcile(&cfg.mcp_servers).await;
+            }
+
+            tracing::info!(server_id = %server_id, state = %new_state, "MCP server toggled via API");
+
+            Json(serde_json::json!({
+                "ok": true,
+                "message": format!("MCP server '{}' {}.", server_id, new_state)
+            }))
+        }
+        None => Json(serde_json::json!({
+            "ok": false,
+            "message": format!("MCP server '{}' not found.", server_id)
+        })),
+    }
 }
