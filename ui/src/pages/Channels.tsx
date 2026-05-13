@@ -177,10 +177,17 @@ export default function Channels() {
   const generatePairingCode = async () => {
     setGeneratingCode(true);
     try {
-      const res = await api.post<{ code: string; status: string }>('/pairing/generate');
-      if (res.ok && res.data) {
-        setPairingCode(res.data.code);
-        setPairingStatus(res.data.status || 'Generated');
+      const res = await fetch('/pairing/generate', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setPairingCode(json.code);
+        setPairingStatus(json.status || 'Generated');
+      } else {
+        setPairingStatus('Failed to generate');
       }
     } catch {
       setPairingStatus('Failed to generate');
