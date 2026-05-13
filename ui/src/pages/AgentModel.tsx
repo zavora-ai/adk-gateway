@@ -91,6 +91,7 @@ export default function AgentModel() {
   const [categories, setCategories] = useState<CategoryModels>({});
   const [categoryProviders, setCategoryProviders] = useState<CategoryProviders>({});
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
+  const [serverConfiguredKeys, setServerConfiguredKeys] = useState<Set<string>>(new Set());
   const [baseUrl, setBaseUrl] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -150,6 +151,12 @@ export default function AgentModel() {
               setCloudConfig(fields);
               setSelectedPreset('enterprise');
             }
+          }
+
+          // Load which API keys are configured on the server
+          const anyD = d as unknown as Record<string, unknown>;
+          if (Array.isArray(anyD.configured_keys)) {
+            setServerConfiguredKeys(new Set(anyD.configured_keys as string[]));
           }
         }
       } catch {
@@ -648,7 +655,7 @@ export default function AgentModel() {
               {requiredProviders.map((provId) => {
                 const info = API_KEY_MAP[provId];
                 if (!info) return null;
-                const hasKey = !!apiKeys[provId];
+                const hasKey = !!apiKeys[provId] || serverConfiguredKeys.has(provId);
                 return (
                   <div key={provId} className="flex items-center gap-3">
                     <label className="w-28 text-sm text-gray-600 shrink-0 flex items-center gap-1.5">
@@ -712,7 +719,7 @@ export default function AgentModel() {
                 {configuredProviders.map(([provId, info]) => {
                   const provLabel = ALL_PROVIDERS.find(p => p.id === provId)?.label || provId;
                   const keyInfo = API_KEY_MAP[provId];
-                  const hasKey = !!(apiKeys[provId]) || NO_KEY_PROVIDERS.has(provId);
+                  const hasKey = !!(apiKeys[provId]) || NO_KEY_PROVIDERS.has(provId) || serverConfiguredKeys.has(provId);
                   return (
                     <div key={provId} className="border border-gray-100 rounded-lg p-3">
                       <div className="flex items-center justify-between mb-1">

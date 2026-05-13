@@ -47,6 +47,24 @@ pub(crate) async fn agent_get(
         "model_hints": model_hints,
     });
 
+    // Report which providers have API keys configured (without exposing the keys)
+    let configured_keys: Vec<&str> = crate::model_factory::PROVIDERS
+        .iter()
+        .filter(|(_, _, env_var)| {
+            if env_var.is_empty() {
+                return false;
+            }
+            std::env::var(env_var).map(|v| !v.is_empty()).unwrap_or(false)
+        })
+        .map(|(id, _, _)| *id)
+        .collect();
+    // Also check GEMINI_API_KEY as an alias for gemini
+    let mut configured_keys_set: std::collections::HashSet<&str> = configured_keys.into_iter().collect();
+    if std::env::var("GEMINI_API_KEY").map(|v| !v.is_empty()).unwrap_or(false) {
+        configured_keys_set.insert("gemini");
+    }
+    data["configured_keys"] = serde_json::json!(configured_keys_set.into_iter().collect::<Vec<_>>());
+
     if let Some(cp) = cloud_provider {
         data["cloud_provider"] = cp;
     }
