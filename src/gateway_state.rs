@@ -411,6 +411,8 @@ pub async fn build(
             "fs_list".to_string(),
             "fs_read".to_string(),
             "fs_search".to_string(),
+            "fs_pwd".to_string(),
+            "fs_tree".to_string(),
         ],
         action_nodes: vec![],
         workflow_edges: vec![],
@@ -495,16 +497,18 @@ pub async fn build(
     }
     tracing::info!("registered 4 scheduled task tools on system agent");
 
-    // Register the 3 filesystem tools in the tool registry
+    // Register the filesystem tools in the tool registry
     let fs_tool_defs = [
+        ("fs_pwd", "Show the workspace root directory path"),
         ("fs_list", "List files and directories at a path"),
+        ("fs_tree", "Show directory tree structure with depth control"),
         ("fs_read", "Read the contents of a file"),
         ("fs_search", "Search for files by name pattern"),
     ];
     for (name, desc) in &fs_tool_defs {
         tool_registry.register_custom(crate::tool_registry::ToolEntry::new(*name, *desc, None));
     }
-    tracing::info!("registered 3 filesystem tools on system agent");
+    tracing::info!("registered 5 filesystem tools on system agent");
 
     // ── AWP protocol state ─────────────────────────────────────────
     let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));

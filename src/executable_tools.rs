@@ -1281,30 +1281,51 @@ fn task_delete_tool(
 /// Build read-only filesystem tools for the system agent.
 pub fn build_filesystem_tools(workspace_root: PathBuf) -> Vec<Arc<dyn adk_core::Tool>> {
     vec![
+        Arc::new(fs_pwd_tool(workspace_root.clone())),
         Arc::new(fs_list_tool(workspace_root.clone())),
+        Arc::new(fs_tree_tool(workspace_root.clone())),
         Arc::new(fs_read_tool(workspace_root.clone())),
         Arc::new(fs_search_tool(workspace_root)),
     ]
 }
 
+fn fs_pwd_tool(root: PathBuf) -> FunctionTool {
+    FunctionTool::new(
+        "fs_pwd",
+        "Show the current workspace root directory (absolute path). No arguments needed.",
+        move |_ctx: Arc<dyn ToolContext>, _args: Value| {
+            let root = root.clone();
+            async move {
+                let abs = root.canonicalize().unwrap_or_else(|_| root.clone());
+                Ok(serde_json::json!({
+                    "workspace_root": abs.to_string_lossy(),
+                }))
+            }
+        },
+    )
+    .with_read_only(true)
+}
+
 fn fs_list_tool(root: PathBuf) -> FunctionTool {
     FunctionTool::new(
         "fs_list",
-        "List files and directories at a given path. Returns names, types (file/dir), and sizes. Path is relative to the workspace root. Use '.' or '' for the root directory.",
+        "List files and directories at a given path. Returns names, types (file/dir), and sizes. Path can be relative to workspace root or absolute. Use '.' for the root directory. Supports '..' for parent traversal within the filesystem.",
         move |_ctx: Arc<dyn ToolContext>, args: Value| {
             let root = root.clone();
             async move {
                 let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-                let target = root.join(path_str);
+                let show_hidden = args.get("show_hidden").and_then(|v| v.as_bool()).unwrap_or(false);
 
-                // Security: prevent path traversal outside workspace
+                // Support absolute paths or relative to workspace
+                let target = if std::path::Path::new(path_str).is_absolute() {
+                    PathBuf::from(path_str)
+                } else {
+                    root.join(path_str)
+                };
+
                 let canonical = target.canonicalize().map_err(|e| {
                     adk_core::AdkError::tool(format!("Path not found: {e}"))
                 })?;
-                let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
-                if !canonical.starts_with(&root_canonical) {
-                    return Err(adk_core::AdkError::tool("Access denied: path outside workspace".to_string()));
-                }
 
                 let mut entries = Vec::new();
                 let read_dir = std::fs::read_dir(&canonical).map_err(|e| {
@@ -1315,8 +1336,11 @@ fn fs_list_tool(root: PathBuf) -> FunctionTool {
                     let meta = entry.metadata().ok();
                     let name = entry.file_name().to_string_lossy().to_string();
 
-                    // Skip hidden files and common noise
-                    if name.starts_with('.') || name == "node_modules" || name == "target" {
+                    // Skip hidden files unless requested, always skip heavy dirs
+                    if !show_hidden && name.starts_with('.') {
+                        continue;
+                    }
+                    if name == "node_modules" || name == "target" {
                         continue;
                     }
 
@@ -1337,7 +1361,7 @@ fn fs_list_tool(root: PathBuf) -> FunctionTool {
                 });
 
                 Ok(serde_json::json!({
-                    "path": path_str,
+                    "path": canonical.to_string_lossy(),
                     "entries": entries,
                     "count": entries.len()
                 }))
@@ -1350,7 +1374,7 @@ fn fs_list_tool(root: PathBuf) -> FunctionTool {
 fn fs_read_tool(root: PathBuf) -> FunctionTool {
     FunctionTool::new(
         "fs_read",
-        "Read the contents of a file. Path is relative to the workspace root. Returns the text content (max 50KB). For binary files, returns a size indicator instead.",
+        "Read the contents of a file. Path can be relative to workspace root or absolute. Returns the text content (max 50KB). For binary files, returns a size indicator instead.",
         move |_ctx: Arc<dyn ToolContext>, args: Value| {
             let root = root.clone();
             async move {
@@ -1359,16 +1383,15 @@ fn fs_read_tool(root: PathBuf) -> FunctionTool {
                     return Err(adk_core::AdkError::tool("'path' is required".to_string()));
                 }
 
-                let target = root.join(path_str);
+                let target = if std::path::Path::new(path_str).is_absolute() {
+                    PathBuf::from(path_str)
+                } else {
+                    root.join(path_str)
+                };
 
-                // Security: prevent path traversal
                 let canonical = target.canonicalize().map_err(|e| {
                     adk_core::AdkError::tool(format!("Path not found: {e}"))
                 })?;
-                let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
-                if !canonical.starts_with(&root_canonical) {
-                    return Err(adk_core::AdkError::tool("Access denied: path outside workspace".to_string()));
-                }
 
                 let meta = std::fs::metadata(&canonical).map_err(|e| {
                     adk_core::AdkError::tool(format!("Cannot read file: {e}"))
@@ -1409,10 +1432,102 @@ fn fs_read_tool(root: PathBuf) -> FunctionTool {
     .with_read_only(true)
 }
 
+fn fs_tree_tool(root: PathBuf) -> FunctionTool {
+    FunctionTool::new(
+        "fs_tree",
+        "Show a directory tree structure with configurable depth. Path can be relative or absolute. Returns an indented tree view of files and directories. Optional 'depth' (default 2, max 5).",
+        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+            let root = root.clone();
+            async move {
+                let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let max_depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(2).min(5) as usize;
+                let show_hidden = args.get("show_hidden").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                let target = if std::path::Path::new(path_str).is_absolute() {
+                    PathBuf::from(path_str)
+                } else {
+                    root.join(path_str)
+                };
+
+                let canonical = target.canonicalize().map_err(|e| {
+                    adk_core::AdkError::tool(format!("Path not found: {e}"))
+                })?;
+
+                if !canonical.is_dir() {
+                    return Err(adk_core::AdkError::tool("Path is not a directory".to_string()));
+                }
+
+                let mut tree = String::new();
+                let mut file_count = 0usize;
+                let mut dir_count = 0usize;
+
+                fn walk(
+                    dir: &std::path::Path,
+                    prefix: &str,
+                    depth: usize,
+                    max_depth: usize,
+                    show_hidden: bool,
+                    tree: &mut String,
+                    file_count: &mut usize,
+                    dir_count: &mut usize,
+                ) {
+                    if depth >= max_depth { return; }
+
+                    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
+                        Ok(rd) => rd.flatten().collect(),
+                        Err(_) => return,
+                    };
+                    entries.sort_by_key(|e| e.file_name());
+
+                    // Filter
+                    let entries: Vec<_> = entries.into_iter().filter(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if !show_hidden && name.starts_with('.') { return false; }
+                        if name == "node_modules" || name == "target" { return false; }
+                        true
+                    }).collect();
+
+                    let count = entries.len();
+                    for (i, entry) in entries.iter().enumerate() {
+                        let is_last = i == count - 1;
+                        let connector = if is_last { "└── " } else { "├── " };
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let is_dir = entry.metadata().map(|m| m.is_dir()).unwrap_or(false);
+
+                        tree.push_str(&format!("{}{}{}{}\n", prefix, connector, name, if is_dir { "/" } else { "" }));
+
+                        if is_dir {
+                            *dir_count += 1;
+                            let new_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+                            walk(&entry.path(), &new_prefix, depth + 1, max_depth, show_hidden, tree, file_count, dir_count);
+                        } else {
+                            *file_count += 1;
+                        }
+                    }
+                }
+
+                let root_name = canonical.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| canonical.to_string_lossy().to_string());
+                tree.push_str(&format!("{}/\n", root_name));
+                walk(&canonical, "", 0, max_depth, show_hidden, &mut tree, &mut file_count, &mut dir_count);
+
+                Ok(serde_json::json!({
+                    "path": canonical.to_string_lossy(),
+                    "tree": tree,
+                    "directories": dir_count,
+                    "files": file_count
+                }))
+            }
+        },
+    )
+    .with_read_only(true)
+}
+
 fn fs_search_tool(root: PathBuf) -> FunctionTool {
     FunctionTool::new(
         "fs_search",
-        "Search for files by name pattern (case-insensitive substring match). Returns matching file paths relative to workspace root. Optional 'path' to limit search to a subdirectory.",
+        "Search for files by name pattern (case-insensitive substring match). Returns matching file paths. Path can be relative or absolute. Optional 'path' to limit search to a subdirectory.",
         move |_ctx: Arc<dyn ToolContext>, args: Value| {
             let root = root.clone();
             async move {
@@ -1422,14 +1537,13 @@ fn fs_search_tool(root: PathBuf) -> FunctionTool {
                 }
 
                 let sub_path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-                let search_root = root.join(sub_path);
+                let search_root = if std::path::Path::new(sub_path).is_absolute() {
+                    PathBuf::from(sub_path)
+                } else {
+                    root.join(sub_path)
+                };
 
-                // Security check
                 let canonical = search_root.canonicalize().unwrap_or_else(|_| search_root.clone());
-                let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
-                if !canonical.starts_with(&root_canonical) {
-                    return Err(adk_core::AdkError::tool("Access denied: path outside workspace".to_string()));
-                }
 
                 let mut matches = Vec::new();
                 let mut stack = vec![canonical.clone()];
@@ -1455,9 +1569,7 @@ fn fs_search_tool(root: PathBuf) -> FunctionTool {
                         if path.is_dir() {
                             stack.push(path);
                         } else if name.to_lowercase().contains(&query) {
-                            if let Ok(rel) = path.strip_prefix(&root_canonical) {
-                                matches.push(rel.to_string_lossy().to_string());
-                            }
+                            matches.push(path.to_string_lossy().to_string());
                             if matches.len() >= max_results { break; }
                         }
                     }

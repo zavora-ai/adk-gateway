@@ -147,6 +147,8 @@ pub const SYSTEM_TOOLS: &[&str] = &[
     "fs_list",
     "fs_read",
     "fs_search",
+    "fs_pwd",
+    "fs_tree",
 ];
 
 // ── RbacBridge ─────────────────────────────────────────────────────
