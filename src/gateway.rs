@@ -252,6 +252,66 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
             tracing::info!("attached {} MCP toolsets to root agent", mcp_toolsets.len());
         }
 
+        // Add observability callbacks for LLM requests and tool calls
+        rebuilt_builder = rebuilt_builder.before_model_callback(Box::new(
+            |_ctx, req| {
+                Box::pin(async move {
+                    let tool_count = req.tools.len();
+                    tracing::info!(
+                        model = %req.model,
+                        tools_declared = tool_count,
+                        "LLM request sending"
+                    );
+                    Ok(adk_core::BeforeModelResult::Continue(req))
+                })
+            },
+        ));
+
+        rebuilt_builder = rebuilt_builder.after_model_callback(Box::new(
+            |_ctx, resp| {
+                Box::pin(async move {
+                    if let Some(ref content) = resp.content {
+                        let tool_names: Vec<&str> = content.parts.iter().filter_map(|p| {
+                            if let adk_core::Part::FunctionCall { name, .. } = p {
+                                Some(name.as_str())
+                            } else {
+                                None
+                            }
+                        }).collect();
+                        if !tool_names.is_empty() {
+                            tracing::info!(
+                                tools = ?tool_names,
+                                "LLM response contains tool calls"
+                            );
+                        }
+                    }
+                    if let Some(ref usage) = resp.usage_metadata {
+                        tracing::info!(
+                            input_tokens = usage.prompt_token_count,
+                            output_tokens = usage.candidates_token_count,
+                            total_tokens = usage.total_token_count,
+                            "LLM token usage"
+                        );
+                    }
+                    Ok(Some(resp))
+                })
+            },
+        ));
+
+        rebuilt_builder = rebuilt_builder.after_tool_callback_full(Box::new(
+            |_ctx, tool, args, result| {
+                Box::pin(async move {
+                    tracing::info!(
+                        tool = %tool.name(),
+                        args = %args,
+                        result_size = result.to_string().len(),
+                        "tool executed"
+                    );
+                    Ok(None) // Don't modify the result
+                })
+            },
+        ));
+
         let rebuilt_agent: Arc<dyn Agent> = Arc::new(rebuilt_builder.build()?);
         state
             .agents
@@ -1379,11 +1439,6 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     // ── Fallback chain integration (R16, Task 4.2) ─────────────────
     // When no fallbacks are configured, use the direct call path (zero overhead).
     // When fallbacks exist, wrap with run_with_fallback to retry on failure.
-    tracing::info!(
-        user = %user_id,
-        model = %state.fallback_chain.primary().model_id(),
-        "sending LLM request"
-    );
     let stream = if !state.fallback_chain.has_fallbacks() {
         // Direct path — no fallback overhead (backward compat)
         match runner.run(uid, sid, content).await {
@@ -1568,15 +1623,6 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     let latency = start.elapsed();
     let tool_call_count = collected.tool_calls.len();
     let stream_duration = collected.duration;
-
-    // Log individual tool calls for debugging
-    for tc in &collected.tool_calls {
-        tracing::info!(
-            tool = %tc.name,
-            args = %tc.args,
-            "tool called"
-        );
-    }
 
     tracing::info!(
         channel = %channel_name,
