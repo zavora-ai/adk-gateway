@@ -329,26 +329,6 @@ export default function AgentModel() {
     }
   };
 
-  // ── Render ─────────────────────────────────────────────────────
-
-  if (loading) {
-    return (
-      <div>
-        <h2 className="text-2xl font-semibold mb-5">Model Providers</h2>
-        <div className="space-y-4 max-w-3xl animate-pulse">
-          {[1, 2, 3].map(i => (
-            <div key={i} className="bg-white rounded-xl shadow-sm p-6">
-              <div className="h-5 bg-gray-200 rounded w-1/3 mb-3" />
-              <div className="h-10 bg-gray-100 rounded w-full" />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  const isEnterprise = selectedPreset === 'enterprise';
-
   // ── Compute configured providers summary for the sidebar ────────
 
   const configuredProviders = useMemo(() => {
@@ -370,6 +350,26 @@ export default function AgentModel() {
     }
     return Object.entries(providerMap).sort((a, b) => b[1].models.length - a[1].models.length);
   }, [categories]);
+
+  // ── Render ─────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div>
+        <h2 className="text-2xl font-semibold mb-5">Model Providers</h2>
+        <div className="space-y-4 max-w-3xl animate-pulse">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="bg-white rounded-xl shadow-sm p-6">
+              <div className="h-5 bg-gray-200 rounded w-1/3 mb-3" />
+              <div className="h-10 bg-gray-100 rounded w-full" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const isEnterprise = selectedPreset === 'enterprise';
 
   return (
     <div>
