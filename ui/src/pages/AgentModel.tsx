@@ -349,6 +349,28 @@ export default function AgentModel() {
 
   const isEnterprise = selectedPreset === 'enterprise';
 
+  // ── Compute configured providers summary for the sidebar ────────
+
+  const configuredProviders = useMemo(() => {
+    const providerMap: Record<string, { models: string[]; categories: string[] }> = {};
+    for (const [catKey, models] of Object.entries(categories)) {
+      for (const modelId of models) {
+        const prov = extractProvider(modelId) || 'unknown';
+        if (!providerMap[prov]) {
+          providerMap[prov] = { models: [], categories: [] };
+        }
+        if (!providerMap[prov].models.includes(modelId)) {
+          providerMap[prov].models.push(modelId);
+        }
+        const catLabel = CATEGORIES.find(c => c.key === catKey)?.label || catKey;
+        if (!providerMap[prov].categories.includes(catLabel)) {
+          providerMap[prov].categories.push(catLabel);
+        }
+      }
+    }
+    return Object.entries(providerMap).sort((a, b) => b[1].models.length - a[1].models.length);
+  }, [categories]);
+
   return (
     <div>
       <h2 className="text-2xl font-semibold mb-5">Model Providers</h2>
@@ -357,7 +379,9 @@ export default function AgentModel() {
         <AlertBanner type={alert.type} message={alert.message} onDismiss={() => setAlert(null)} />
       )}
 
-      <div className="space-y-6 max-w-3xl">
+      <div className="flex gap-6">
+      {/* ── Left Column: Configuration Form ─────────────────── */}
+      <div className="space-y-6 flex-1 min-w-0 max-w-3xl">
         {/* ── Preset Selector ─────────────────────────────────── */}
         <div>
           <h3 className="text-lg font-semibold mb-3">🎯 Quick Setup</h3>
@@ -672,6 +696,82 @@ export default function AgentModel() {
         >
           {saving ? 'Saving...' : 'Save Configuration'}
         </button>
+      </div>
+
+      {/* ── Right Column: Configured Providers Summary ────────── */}
+      <div className="w-80 shrink-0 hidden lg:block">
+        <div className="sticky top-6 space-y-4">
+          <div className="bg-white rounded-xl shadow-sm p-5">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+              <span>⚡</span> Configured Providers
+            </h3>
+            {configuredProviders.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">No models selected yet. Choose a preset or add models to see your provider summary.</p>
+            ) : (
+              <div className="space-y-3">
+                {configuredProviders.map(([provId, info]) => {
+                  const provLabel = ALL_PROVIDERS.find(p => p.id === provId)?.label || provId;
+                  const keyInfo = API_KEY_MAP[provId];
+                  const hasKey = !!(apiKeys[provId]) || NO_KEY_PROVIDERS.has(provId);
+                  return (
+                    <div key={provId} className="border border-gray-100 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium text-gray-800">{provLabel}</span>
+                        {keyInfo && !NO_KEY_PROVIDERS.has(provId) && (
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${hasKey ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                            {hasKey ? '🔑 Set' : '⚠️ No key'}
+                          </span>
+                        )}
+                        {NO_KEY_PROVIDERS.has(provId) && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">Local</span>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 mb-1.5">
+                        {info.categories.join(' · ')}
+                      </div>
+                      <div className="space-y-0.5">
+                        {info.models.map((m) => (
+                          <div key={m} className="text-xs font-mono text-gray-600 truncate">{m}</div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Provider count summary */}
+          {configuredProviders.length > 0 && (
+            <div className="bg-gray-50 rounded-xl p-4">
+              <div className="grid grid-cols-2 gap-3 text-center">
+                <div>
+                  <div className="text-lg font-bold text-gray-800">{configuredProviders.length}</div>
+                  <div className="text-xs text-gray-500">Providers</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-gray-800">
+                    {Object.values(categories).reduce((sum, arr) => sum + arr.length, 0)}
+                  </div>
+                  <div className="text-xs text-gray-500">Models</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-gray-800">
+                    {Object.keys(categories).length}
+                  </div>
+                  <div className="text-xs text-gray-500">Categories</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-gray-800">
+                    {requiredProviders.filter(p => !!apiKeys[p]).length}/{requiredProviders.length}
+                  </div>
+                  <div className="text-xs text-gray-500">Keys Set</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
       </div>
 
       {/* ── Success Modal ─────────────────────────────────────── */}
