@@ -23,12 +23,78 @@ export default function Integrations() {
     env: '',
     disabled: false,
   });
+  const [jsonMode, setJsonMode] = useState(false);
+  const [jsonInput, setJsonInput] = useState('');
 
   const cronJobs = cronData?.jobs ?? [];
   const tools = toolsData?.tools ?? [];
 
   const handleAddMcp = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (jsonMode) {
+      // JSON paste mode
+      if (!jsonInput.trim()) {
+        setAlert({ type: 'error', message: 'Paste a JSON config block.' });
+        return;
+      }
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(jsonInput.trim());
+      } catch {
+        setAlert({ type: 'error', message: 'Invalid JSON. Expected: {"server-name": {"command": "...", "args": [...]}}' });
+        return;
+      }
+
+      // Support both {"mcpServers": {...}} wrapper and direct {"name": {...}} format
+      const servers = (parsed.mcpServers as Record<string, unknown>) ?? parsed;
+      let addedCount = 0;
+
+      for (const [serverId, serverConfig] of Object.entries(servers)) {
+        if (typeof serverConfig !== 'object' || serverConfig === null) continue;
+        const cfg = serverConfig as Record<string, unknown>;
+
+        const payload: Record<string, unknown> = {
+          server_id: serverId,
+          disabled: cfg.disabled ?? false,
+        };
+
+        if (cfg.command) {
+          payload.transport = 'stdio';
+          payload.command = cfg.command;
+          payload.args = cfg.args ?? [];
+          payload.env = cfg.env ?? {};
+        } else if (cfg.url) {
+          payload.transport = 'http';
+          payload.url = cfg.url;
+        } else {
+          setAlert({ type: 'error', message: `Server '${serverId}' needs 'command' or 'url'.` });
+          return;
+        }
+
+        try {
+          const res = await api.addMcpServer(payload);
+          if (res.ok) {
+            addedCount++;
+          } else {
+            setAlert({ type: 'error', message: res.message || `Failed to add '${serverId}'.` });
+            return;
+          }
+        } catch {
+          setAlert({ type: 'error', message: 'Network error.' });
+          return;
+        }
+      }
+
+      if (addedCount > 0) {
+        setAlert({ type: 'success', message: `Added ${addedCount} MCP server${addedCount > 1 ? 's' : ''}.` });
+        setJsonInput('');
+        refetchMcp();
+      }
+      return;
+    }
+
+    // Form mode
     if (!mcpForm.server_id.trim()) {
       setAlert({ type: 'error', message: 'Server ID is required.' });
       return;
@@ -150,8 +216,46 @@ export default function Integrations() {
       )}
 
       {/* Add MCP Server Form */}
-      <h3 className="text-lg font-semibold mb-3">Add MCP Server</h3>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-lg font-semibold">Add MCP Server</h3>
+        <button
+          type="button"
+          onClick={() => setJsonMode(!jsonMode)}
+          className="px-3 py-1 text-xs font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+        >
+          {jsonMode ? '← Form Mode' : 'Paste JSON'}
+        </button>
+      </div>
       <form onSubmit={handleAddMcp} className="bg-white rounded-xl shadow-sm p-5 mb-6 space-y-4">
+        {jsonMode ? (
+          <>
+            <p className="text-sm text-gray-500">
+              Paste a JSON config block. Supports both formats:
+            </p>
+            <pre className="text-xs text-gray-400 bg-gray-50 rounded-lg p-3 font-mono">
+{`{"server-name": {"command": "uvx", "args": ["pkg@latest"], "env": {"KEY": "val"}}}
+
+// or with wrapper:
+{"mcpServers": {"server-name": {"command": "uvx", "args": ["pkg@latest"]}}}`}
+            </pre>
+            <textarea
+              value={jsonInput}
+              onChange={(e) => setJsonInput(e.target.value)}
+              placeholder='{"my-server": {"command": "uvx", "args": ["package@latest"]}}'
+              rows={8}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Add from JSON
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Server ID</label>
@@ -240,6 +344,8 @@ export default function Integrations() {
             Add Server
           </button>
         </div>
+          </>
+        )}
       </form>
 
       {/* MCP Servers Table */}

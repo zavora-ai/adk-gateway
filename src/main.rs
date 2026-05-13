@@ -159,10 +159,16 @@ enum PairingCommands {
 #[derive(Subcommand)]
 enum McpCommands {
     /// Add an MCP server
+    ///
+    /// Supports two modes:
+    ///   1. Flag-based: --name my-server --command uvx --args "pkg@latest"
+    ///   2. JSON input:  --json '{"my-server": {"command": "uvx", "args": ["pkg@latest"], "env": {"KEY": "val"}}}'
+    ///
+    /// The JSON format matches the standard mcpServers config block.
     Add {
-        /// Server name/ID
-        #[arg(long)]
-        name: String,
+        /// Server name/ID (required unless --json is used)
+        #[arg(long, required_unless_present = "json")]
+        name: Option<String>,
         /// Command to run (for stdio transport)
         #[arg(long)]
         command: Option<String>,
@@ -178,6 +184,9 @@ enum McpCommands {
         /// Disable the server (default: enabled)
         #[arg(long)]
         disabled: bool,
+        /// JSON config: '{"name": {"command": "...", "args": [...], "env": {...}}}'
+        #[arg(long, conflicts_with_all = ["command", "url", "args", "env"])]
+        json: Option<String>,
     },
     /// Remove an MCP server
     Remove {
@@ -326,49 +335,119 @@ fn handle_mcp_command(
             env,
             url,
             disabled,
+            json,
         } => {
-            // Determine transport
-            let transport = if let Some(cmd_str) = command {
-                let env_map: std::collections::HashMap<String, String> = env
-                    .iter()
-                    .filter_map(|e| {
-                        let parts: Vec<&str> = e.splitn(2, '=').collect();
-                        if parts.len() == 2 {
-                            Some((parts[0].to_string(), parts[1].to_string()))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                mcp::McpTransport::Stdio {
-                    command: cmd_str,
-                    args,
-                    env: env_map,
-                }
-            } else if let Some(url_str) = url {
-                mcp::McpTransport::Sse { url: url_str }
-            } else {
-                anyhow::bail!("either --command or --url must be provided");
-            };
-
-            let new_server = mcp::McpServerConfig {
-                server_id: name.clone(),
-                transport,
-                auth: None,
-                enabled: !disabled,
-            };
-
-            // Update config
             let mut updated_cfg = cfg.clone();
-            // Remove existing entry with same name if present
-            updated_cfg.mcp_servers.retain(|s| s.server_id != name);
-            updated_cfg.mcp_servers.push(new_server);
+
+            if let Some(json_str) = json {
+                // JSON mode: parse as {"server-name": {"command": "...", "args": [...], "env": {...}}}
+                let parsed: serde_json::Value = serde_json::from_str(&json_str)
+                    .map_err(|e| anyhow::anyhow!("invalid JSON: {e}"))?;
+
+                let obj = parsed
+                    .as_object()
+                    .ok_or_else(|| anyhow::anyhow!("JSON must be an object mapping server names to configs"))?;
+
+                for (server_name, server_val) in obj {
+                    let server_obj = server_val.as_object().ok_or_else(|| {
+                        anyhow::anyhow!("config for '{server_name}' must be an object")
+                    })?;
+
+                    let transport = if let Some(cmd_val) = server_obj.get("command") {
+                        let cmd_str = cmd_val
+                            .as_str()
+                            .ok_or_else(|| anyhow::anyhow!("'command' must be a string"))?
+                            .to_string();
+                        let args_val: Vec<String> = server_obj
+                            .get("args")
+                            .and_then(|a| a.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let env_map: std::collections::HashMap<String, String> = server_obj
+                            .get("env")
+                            .and_then(|e| e.as_object())
+                            .map(|obj| {
+                                obj.iter()
+                                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        mcp::McpTransport::Stdio {
+                            command: cmd_str,
+                            args: args_val,
+                            env: env_map,
+                        }
+                    } else if let Some(url_val) = server_obj.get("url") {
+                        let url_str = url_val
+                            .as_str()
+                            .ok_or_else(|| anyhow::anyhow!("'url' must be a string"))?
+                            .to_string();
+                        mcp::McpTransport::Sse { url: url_str }
+                    } else {
+                        anyhow::bail!("server '{server_name}' must have 'command' or 'url'");
+                    };
+
+                    let is_disabled = server_obj
+                        .get("disabled")
+                        .and_then(|d| d.as_bool())
+                        .unwrap_or(false);
+
+                    let new_server = mcp::McpServerConfig {
+                        server_id: server_name.clone(),
+                        transport,
+                        auth: None,
+                        enabled: !is_disabled,
+                    };
+
+                    updated_cfg.mcp_servers.retain(|s| s.server_id != *server_name);
+                    updated_cfg.mcp_servers.push(new_server);
+                    println!("Added MCP server '{server_name}'");
+                }
+            } else {
+                // Flag-based mode
+                let name = name.expect("name is required when --json is not used");
+                let transport = if let Some(cmd_str) = command {
+                    let env_map: std::collections::HashMap<String, String> = env
+                        .iter()
+                        .filter_map(|e| {
+                            let parts: Vec<&str> = e.splitn(2, '=').collect();
+                            if parts.len() == 2 {
+                                Some((parts[0].to_string(), parts[1].to_string()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    mcp::McpTransport::Stdio {
+                        command: cmd_str,
+                        args,
+                        env: env_map,
+                    }
+                } else if let Some(url_str) = url {
+                    mcp::McpTransport::Sse { url: url_str }
+                } else {
+                    anyhow::bail!("either --command or --url must be provided");
+                };
+
+                let new_server = mcp::McpServerConfig {
+                    server_id: name.clone(),
+                    transport,
+                    auth: None,
+                    enabled: !disabled,
+                };
+
+                updated_cfg.mcp_servers.retain(|s| s.server_id != name);
+                updated_cfg.mcp_servers.push(new_server);
+                println!("Added MCP server '{name}'");
+            }
 
             // Write back
             let output = serde_json::to_string_pretty(&updated_cfg)?;
             std::fs::write(config_path, &output)?;
-
-            println!("Added MCP server '{name}'");
         }
         McpCommands::Remove { name } => {
             let mut updated_cfg = cfg.clone();
