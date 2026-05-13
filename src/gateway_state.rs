@@ -408,6 +408,9 @@ pub async fn build(
             "task_create".to_string(),
             "task_cancel".to_string(),
             "task_delete".to_string(),
+            "fs_list".to_string(),
+            "fs_read".to_string(),
+            "fs_search".to_string(),
         ],
         action_nodes: vec![],
         workflow_edges: vec![],
@@ -492,6 +495,17 @@ pub async fn build(
     }
     tracing::info!("registered 4 scheduled task tools on system agent");
 
+    // Register the 3 filesystem tools in the tool registry
+    let fs_tool_defs = [
+        ("fs_list", "List files and directories at a path"),
+        ("fs_read", "Read the contents of a file"),
+        ("fs_search", "Search for files by name pattern"),
+    ];
+    for (name, desc) in &fs_tool_defs {
+        tool_registry.register_custom(crate::tool_registry::ToolEntry::new(*name, *desc, None));
+    }
+    tracing::info!("registered 3 filesystem tools on system agent");
+
     // ── AWP protocol state ─────────────────────────────────────────
     let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
     let awp_state = crate::awp::build_awp_state(&config.awp, config_dir).await?;
@@ -556,6 +570,11 @@ pub async fn build(
         scheduled_task_tools.len()
     );
     agent_management_tools.extend(scheduled_task_tools);
+
+    // Build 3 filesystem tools (read-only)
+    let fs_tools = crate::executable_tools::build_filesystem_tools(data_dir.clone());
+    tracing::info!("built {} filesystem tools", fs_tools.len());
+    agent_management_tools.extend(fs_tools);
 
     Ok(GatewayState {
         config: Arc::new(ArcSwap::from_pointee(config.clone())),

@@ -1275,3 +1275,202 @@ fn task_delete_tool(
         },
     )
 }
+
+// ── Filesystem Tools ───────────────────────────────────────────────
+
+/// Build read-only filesystem tools for the system agent.
+pub fn build_filesystem_tools(workspace_root: PathBuf) -> Vec<Arc<dyn adk_core::Tool>> {
+    vec![
+        Arc::new(fs_list_tool(workspace_root.clone())),
+        Arc::new(fs_read_tool(workspace_root.clone())),
+        Arc::new(fs_search_tool(workspace_root)),
+    ]
+}
+
+fn fs_list_tool(root: PathBuf) -> FunctionTool {
+    FunctionTool::new(
+        "fs_list",
+        "List files and directories at a given path. Returns names, types (file/dir), and sizes. Path is relative to the workspace root. Use '.' or '' for the root directory.",
+        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+            let root = root.clone();
+            async move {
+                let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let target = root.join(path_str);
+
+                // Security: prevent path traversal outside workspace
+                let canonical = target.canonicalize().map_err(|e| {
+                    adk_core::AdkError::tool(format!("Path not found: {e}"))
+                })?;
+                let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
+                if !canonical.starts_with(&root_canonical) {
+                    return Err(adk_core::AdkError::tool("Access denied: path outside workspace".to_string()));
+                }
+
+                let mut entries = Vec::new();
+                let read_dir = std::fs::read_dir(&canonical).map_err(|e| {
+                    adk_core::AdkError::tool(format!("Cannot read directory: {e}"))
+                })?;
+
+                for entry in read_dir.flatten() {
+                    let meta = entry.metadata().ok();
+                    let name = entry.file_name().to_string_lossy().to_string();
+
+                    // Skip hidden files and common noise
+                    if name.starts_with('.') || name == "node_modules" || name == "target" {
+                        continue;
+                    }
+
+                    entries.push(serde_json::json!({
+                        "name": name,
+                        "type": if meta.as_ref().map(|m| m.is_dir()).unwrap_or(false) { "dir" } else { "file" },
+                        "size": meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                    }));
+                }
+
+                entries.sort_by(|a, b| {
+                    let a_type = a["type"].as_str().unwrap_or("");
+                    let b_type = b["type"].as_str().unwrap_or("");
+                    // Directories first, then alphabetical
+                    b_type.cmp(a_type).then_with(|| {
+                        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+                    })
+                });
+
+                Ok(serde_json::json!({
+                    "path": path_str,
+                    "entries": entries,
+                    "count": entries.len()
+                }))
+            }
+        },
+    )
+    .with_read_only(true)
+}
+
+fn fs_read_tool(root: PathBuf) -> FunctionTool {
+    FunctionTool::new(
+        "fs_read",
+        "Read the contents of a file. Path is relative to the workspace root. Returns the text content (max 50KB). For binary files, returns a size indicator instead.",
+        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+            let root = root.clone();
+            async move {
+                let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                if path_str.is_empty() {
+                    return Err(adk_core::AdkError::tool("'path' is required".to_string()));
+                }
+
+                let target = root.join(path_str);
+
+                // Security: prevent path traversal
+                let canonical = target.canonicalize().map_err(|e| {
+                    adk_core::AdkError::tool(format!("Path not found: {e}"))
+                })?;
+                let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
+                if !canonical.starts_with(&root_canonical) {
+                    return Err(adk_core::AdkError::tool("Access denied: path outside workspace".to_string()));
+                }
+
+                let meta = std::fs::metadata(&canonical).map_err(|e| {
+                    adk_core::AdkError::tool(format!("Cannot read file: {e}"))
+                })?;
+
+                if meta.is_dir() {
+                    return Err(adk_core::AdkError::tool("Path is a directory, use fs_list instead".to_string()));
+                }
+
+                // Cap at 50KB to avoid blowing up context
+                const MAX_SIZE: u64 = 50 * 1024;
+                if meta.len() > MAX_SIZE {
+                    return Ok(serde_json::json!({
+                        "path": path_str,
+                        "truncated": true,
+                        "size": meta.len(),
+                        "content": std::fs::read_to_string(&canonical)
+                            .map(|s| s[..MAX_SIZE as usize].to_string())
+                            .unwrap_or_else(|_| format!("[Binary file, {} bytes]", meta.len()))
+                    }));
+                }
+
+                match std::fs::read_to_string(&canonical) {
+                    Ok(content) => Ok(serde_json::json!({
+                        "path": path_str,
+                        "size": meta.len(),
+                        "content": content
+                    })),
+                    Err(_) => Ok(serde_json::json!({
+                        "path": path_str,
+                        "size": meta.len(),
+                        "content": format!("[Binary file, {} bytes]", meta.len())
+                    })),
+                }
+            }
+        },
+    )
+    .with_read_only(true)
+}
+
+fn fs_search_tool(root: PathBuf) -> FunctionTool {
+    FunctionTool::new(
+        "fs_search",
+        "Search for files by name pattern (case-insensitive substring match). Returns matching file paths relative to workspace root. Optional 'path' to limit search to a subdirectory.",
+        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+            let root = root.clone();
+            async move {
+                let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                if query.is_empty() {
+                    return Err(adk_core::AdkError::tool("'query' is required".to_string()));
+                }
+
+                let sub_path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                let search_root = root.join(sub_path);
+
+                // Security check
+                let canonical = search_root.canonicalize().unwrap_or_else(|_| search_root.clone());
+                let root_canonical = root.canonicalize().unwrap_or_else(|_| root.clone());
+                if !canonical.starts_with(&root_canonical) {
+                    return Err(adk_core::AdkError::tool("Access denied: path outside workspace".to_string()));
+                }
+
+                let mut matches = Vec::new();
+                let mut stack = vec![canonical.clone()];
+                let max_results = 50;
+
+                while let Some(dir) = stack.pop() {
+                    if matches.len() >= max_results { break; }
+
+                    let entries = match std::fs::read_dir(&dir) {
+                        Ok(e) => e,
+                        Err(_) => continue,
+                    };
+
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+
+                        // Skip hidden/noise
+                        if name.starts_with('.') || name == "node_modules" || name == "target" {
+                            continue;
+                        }
+
+                        let path = entry.path();
+                        if path.is_dir() {
+                            stack.push(path);
+                        } else if name.to_lowercase().contains(&query) {
+                            if let Ok(rel) = path.strip_prefix(&root_canonical) {
+                                matches.push(rel.to_string_lossy().to_string());
+                            }
+                            if matches.len() >= max_results { break; }
+                        }
+                    }
+                }
+
+                Ok(serde_json::json!({
+                    "query": query,
+                    "matches": matches,
+                    "count": matches.len(),
+                    "truncated": matches.len() >= max_results
+                }))
+            }
+        },
+    )
+    .with_read_only(true)
+}
