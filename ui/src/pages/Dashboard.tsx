@@ -4,7 +4,7 @@ import { api } from '../api/client';
 import MetricCard from '../components/MetricCard';
 import StatusBadge from '../components/StatusBadge';
 import type { DashboardData } from '../types';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 function formatUptime(secs: number): string {
@@ -48,6 +48,9 @@ export default function Dashboard() {
         <MetricCard label="Active Sessions" value={sessionCount} />
         <MetricCard label="Channels" value={data.connected_channels.length} />
       </div>
+
+      {/* Pairing Code */}
+      <PairingWidget />
 
       {/* Channels table */}
       <h3 className="text-lg font-semibold mb-3">Channels</h3>
@@ -186,5 +189,62 @@ function OnboardingStep({ num, title, description, href }: { num: number; title:
         <div className="text-xs text-gray-500">{description}</div>
       </div>
     </a>
+  );
+}
+
+function PairingWidget() {
+  const [code, setCode] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [status, setStatus] = useState('');
+
+  const generate = useCallback(async () => {
+    setGenerating(true);
+    setStatus('');
+    try {
+      const res = await fetch('/pairing/generate', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setCode(json.code);
+        setStatus('Valid for 24 hours');
+      } else {
+        setStatus('Failed to generate');
+      }
+    } catch {
+      setStatus('Failed to generate');
+    } finally {
+      setGenerating(false);
+    }
+  }, []);
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm p-5 mb-6 flex items-center gap-4">
+      <div className="flex-1">
+        <h4 className="text-sm font-semibold text-gray-800 mb-1">🔗 Pairing Code</h4>
+        <p className="text-xs text-gray-500">
+          Generate a code to pair new users via DM. Send this code to users so they can authenticate with the bot.
+        </p>
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        {code && (
+          <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-2 font-mono text-lg tracking-widest text-gray-800">
+            {code}
+          </div>
+        )}
+        <div className="text-right">
+          <button
+            onClick={generate}
+            disabled={generating}
+            className="px-4 py-2 text-sm font-medium bg-[var(--color-accent)] text-white rounded-lg hover:bg-[var(--color-accent-hover)] disabled:opacity-50"
+          >
+            {generating ? '...' : code ? 'New Code' : 'Generate'}
+          </button>
+          {status && <div className="text-xs text-gray-400 mt-1">{status}</div>}
+        </div>
+      </div>
+    </div>
   );
 }

@@ -208,6 +208,28 @@ export default function Channels() {
         <div className="text-sm text-gray-500">Loading channel configuration...</div>
       ) : (
       <div className="space-y-6 max-w-2xl">
+        {/* Pairing */}
+        <div className="bg-white rounded-xl shadow-sm p-6">
+          <h3 className="text-lg font-semibold mb-4">🔗 Pairing</h3>
+          <div className="flex items-center gap-3 mb-3">
+            <button
+              onClick={generatePairingCode}
+              disabled={generatingCode}
+              className="px-4 py-2 text-sm font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+            >
+              {generatingCode ? 'Generating...' : 'Generate Pairing Code'}
+            </button>
+            {pairingStatus && (
+              <span className="text-sm text-gray-500">{pairingStatus}</span>
+            )}
+          </div>
+          {pairingCode && (
+            <div className="bg-gray-50 rounded-lg p-4 font-mono text-lg text-center tracking-widest">
+              {pairingCode}
+            </div>
+          )}
+        </div>
+
         {/* Telegram */}
         <div className="bg-white rounded-xl shadow-sm p-6">
           <div className="flex items-center justify-between mb-4">
@@ -499,28 +521,6 @@ export default function Channels() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
                 />
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* Pairing */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h3 className="text-lg font-semibold mb-4">🔗 Pairing</h3>
-          <div className="flex items-center gap-3 mb-3">
-            <button
-              onClick={generatePairingCode}
-              disabled={generatingCode}
-              className="px-4 py-2 text-sm font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50"
-            >
-              {generatingCode ? 'Generating...' : 'Generate Pairing Code'}
-            </button>
-            {pairingStatus && (
-              <span className="text-sm text-gray-500">{pairingStatus}</span>
-            )}
-          </div>
-          {pairingCode && (
-            <div className="bg-gray-50 rounded-lg p-4 font-mono text-lg text-center tracking-widest">
-              {pairingCode}
             </div>
           )}
         </div>
