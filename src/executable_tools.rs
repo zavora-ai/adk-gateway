@@ -45,6 +45,7 @@ fn kg_create_entities(kg: Arc<KnowledgeGraph>) -> FunctionTool {
             let kg = kg.clone();
             async move {
                 let user_id = ctx.user_id().to_string();
+                tracing::info!(user_id = %user_id, "kg_create_entities: storing for user");
                 let entities = args.get("entities")
                     .and_then(|v| v.as_array())
                     .ok_or_else(|| adk_core::AdkError::tool("'entities' array is required".to_string()))?;
@@ -160,7 +161,17 @@ fn kg_read_graph(kg: Arc<KnowledgeGraph>) -> FunctionTool {
                 let user_id = ctx.user_id().to_string();
                 let _ = args; // no args needed
 
+                tracing::info!(user_id = %user_id, "kg_read_graph: querying KG");
+
                 let (entities, relations) = kg.read_graph(&user_id);
+
+                tracing::info!(
+                    user_id = %user_id,
+                    entity_count = entities.len(),
+                    relation_count = relations.len(),
+                    "kg_read_graph: results"
+                );
+
                 let entity_values: Vec<Value> = entities.iter().map(|e| {
                     serde_json::json!({
                         "name": e.name,
