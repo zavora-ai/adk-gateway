@@ -152,6 +152,11 @@ impl CronScheduler {
             .unwrap_or(false)
     }
 
+    /// Return full details of all tracked jobs (active and cancelled).
+    pub fn list_all_jobs(&self) -> Vec<(&CronJob, &CronJobStatus)> {
+        self.jobs.values().map(|s| (&s.job, &s.status)).collect()
+    }
+
     /// Parse a message to determine if it's an agent prompt (starts with `ask:`).
     pub fn parse_message(message: &str) -> CronMessageKind<'_> {
         if let Some(prompt) = message.strip_prefix("ask:") {

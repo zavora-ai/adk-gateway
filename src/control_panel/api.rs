@@ -584,26 +584,63 @@ pub async fn integrations_mcp(
 pub async fn integrations_cron(
     State(state): State<Arc<ControlPanelState>>,
 ) -> Json<serde_json::Value> {
-    let jobs = match &state.cron_scheduler {
+    // Merge config-defined jobs with runtime status
+    let config = state.config.load();
+    let config_jobs = &config.cron.jobs;
+
+    let jobs: Vec<serde_json::Value> = match &state.cron_scheduler {
         Some(scheduler) => {
             let guard = scheduler.lock().await;
             match guard.as_ref() {
                 Some(sched) => {
-                    let active_ids = sched.active_job_ids();
-                    active_ids
-                        .iter()
-                        .map(|id| {
-                            serde_json::json!({
-                                "job_id": id,
-                                "active": sched.is_active(id),
-                            })
+                    sched.list_all_jobs().iter().map(|(job, status)| {
+                        serde_json::json!({
+                            "id": job.id,
+                            "schedule": job.schedule,
+                            "message": job.message,
+                            "delivery": job.deliver_to.as_ref().map(|d| serde_json::json!({
+                                "channel": d.channel,
+                                "target": d.target,
+                            })),
+                            "status": match status {
+                                crate::cron::CronJobStatus::Active => "Active",
+                                crate::cron::CronJobStatus::Cancelled => "Cancelled",
+                            },
                         })
-                        .collect::<Vec<_>>()
+                    }).collect()
                 }
-                None => vec![],
+                None => {
+                    // No scheduler running — show config jobs as inactive
+                    config_jobs.iter().map(|job| {
+                        serde_json::json!({
+                            "id": job.id,
+                            "schedule": job.schedule,
+                            "message": job.message,
+                            "delivery": job.deliver_to.as_ref().map(|d| serde_json::json!({
+                                "channel": d.channel,
+                                "target": d.target,
+                            })),
+                            "status": "Stopped",
+                        })
+                    }).collect()
+                }
             }
         }
-        None => vec![],
+        None => {
+            // No scheduler at all — show config jobs
+            config_jobs.iter().map(|job| {
+                serde_json::json!({
+                    "id": job.id,
+                    "schedule": job.schedule,
+                    "message": job.message,
+                    "delivery": job.deliver_to.as_ref().map(|d| serde_json::json!({
+                        "channel": d.channel,
+                        "target": d.target,
+                    })),
+                    "status": "Stopped",
+                })
+            }).collect()
+        }
     };
 
     Json(serde_json::json!({
@@ -612,6 +649,175 @@ pub async fn integrations_cron(
             "jobs": jobs,
             "total": jobs.len(),
         }
+    }))
+}
+
+/// POST /ui/api/scheduled-tasks — Create a new scheduled task.
+pub async fn scheduled_task_create(
+    State(state): State<Arc<ControlPanelState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let id = payload.get("id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let schedule = payload.get("schedule").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let message = payload.get("message").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+
+    if id.is_empty() || schedule.is_empty() || message.is_empty() {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": "Fields 'id', 'schedule', and 'message' are required."
+        }));
+    }
+
+    let delivery = payload.get("delivery").and_then(|d| {
+        let channel = d.get("channel")?.as_str()?.to_string();
+        let target = d.get("target")?.as_str()?.to_string();
+        if channel.is_empty() { return None; }
+        Some(crate::config::CronDelivery { channel, target })
+    });
+
+    let new_job = crate::config::CronJob {
+        id: id.clone(),
+        schedule,
+        message,
+        deliver_to: delivery,
+    };
+
+    // Persist to config
+    let config_path = match &state.config_path {
+        Some(p) => p.clone(),
+        None => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": "Config file path not configured"
+            }));
+        }
+    };
+
+    let mut cfg = state.config.load().as_ref().clone();
+
+    // Check for duplicate ID
+    if cfg.cron.jobs.iter().any(|j| j.id == id) {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("A scheduled task with ID '{}' already exists.", id)
+        }));
+    }
+
+    cfg.cron.jobs.push(new_job.clone());
+
+    // Write to disk
+    let output = match serde_json::to_string_pretty(&cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": format!("Failed to serialize config: {e}")
+            }));
+        }
+    };
+
+    if let Err(e) = std::fs::write(&config_path, &output) {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Failed to write config: {e}")
+        }));
+    }
+
+    // Hot-reload: update in-memory config and schedule the job
+    state.config.store(std::sync::Arc::new(cfg.clone()));
+    if let Some(scheduler) = &state.cron_scheduler {
+        let mut guard = scheduler.lock().await;
+        if let Some(sched) = guard.as_mut() {
+            sched.reconcile(&cfg.cron.jobs);
+        }
+    }
+
+    tracing::info!(job_id = %id, "scheduled task created via API");
+
+    Json(serde_json::json!({
+        "ok": true,
+        "message": format!("Scheduled task '{}' created.", id)
+    }))
+}
+
+/// POST /ui/api/scheduled-tasks/:id/cancel — Cancel a scheduled task.
+pub async fn scheduled_task_cancel(
+    State(state): State<Arc<ControlPanelState>>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    if let Some(scheduler) = &state.cron_scheduler {
+        let mut guard = scheduler.lock().await;
+        if let Some(sched) = guard.as_mut() {
+            sched.cancel(&task_id);
+        }
+    }
+
+    tracing::info!(job_id = %task_id, "scheduled task cancelled via API");
+
+    Json(serde_json::json!({
+        "ok": true,
+        "message": format!("Scheduled task '{}' cancelled.", task_id)
+    }))
+}
+
+/// DELETE /ui/api/scheduled-tasks/:id — Remove a scheduled task from config.
+pub async fn scheduled_task_delete(
+    State(state): State<Arc<ControlPanelState>>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    let config_path = match &state.config_path {
+        Some(p) => p.clone(),
+        None => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": "Config file path not configured"
+            }));
+        }
+    };
+
+    let mut cfg = state.config.load().as_ref().clone();
+    let before = cfg.cron.jobs.len();
+    cfg.cron.jobs.retain(|j| j.id != task_id);
+
+    if cfg.cron.jobs.len() == before {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Scheduled task '{}' not found.", task_id)
+        }));
+    }
+
+    // Write to disk
+    let output = match serde_json::to_string_pretty(&cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            return Json(serde_json::json!({
+                "ok": false,
+                "message": format!("Failed to serialize config: {e}")
+            }));
+        }
+    };
+
+    if let Err(e) = std::fs::write(&config_path, &output) {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Failed to write config: {e}")
+        }));
+    }
+
+    // Hot-reload
+    state.config.store(std::sync::Arc::new(cfg.clone()));
+    if let Some(scheduler) = &state.cron_scheduler {
+        let mut guard = scheduler.lock().await;
+        if let Some(sched) = guard.as_mut() {
+            sched.reconcile(&cfg.cron.jobs);
+        }
+    }
+
+    tracing::info!(job_id = %task_id, "scheduled task deleted via API");
+
+    Json(serde_json::json!({
+        "ok": true,
+        "message": format!("Scheduled task '{}' deleted.", task_id)
     }))
 }
 

@@ -8,6 +8,7 @@ import Channels from './pages/Channels';
 import Sessions from './pages/Sessions';
 import AWP from './pages/AWP';
 import Integrations from './pages/Integrations';
+import ScheduledTasks from './pages/ScheduledTasks';
 import Config from './pages/Config';
 import Logs from './pages/Logs';
 import Memory from './pages/Memory';
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="sessions" element={<Sessions />} />
           <Route path="awp" element={<AWP />} />
           <Route path="integrations" element={<Integrations />} />
+          <Route path="scheduled-tasks" element={<ScheduledTasks />} />
           <Route path="config" element={<Config />} />
           <Route path="logs" element={<Logs />} />
           <Route path="memory" element={<Memory />} />

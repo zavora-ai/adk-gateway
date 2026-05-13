@@ -501,6 +501,18 @@ pub fn build_routes(state: Arc<ControlPanelState>) -> axum::Router<Arc<ControlPa
             axum::routing::get(api::integrations_cron),
         )
         .route(
+            "/ui/api/scheduled-tasks",
+            axum::routing::post(api::scheduled_task_create),
+        )
+        .route(
+            "/ui/api/scheduled-tasks/{id}/cancel",
+            axum::routing::post(api::scheduled_task_cancel),
+        )
+        .route(
+            "/ui/api/scheduled-tasks/{id}",
+            axum::routing::delete(api::scheduled_task_delete),
+        )
+        .route(
             "/ui/api/integrations/tools",
             axum::routing::get(api::integrations_tools),
         )

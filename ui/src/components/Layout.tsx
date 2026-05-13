@@ -9,6 +9,7 @@ const navItems = [
   { to: '/ui/sessions', label: '👥 Sessions' },
   { to: '/ui/awp', label: '🌐 AWP' },
   { to: '/ui/integrations', label: '🔌 Integrations' },
+  { to: '/ui/scheduled-tasks', label: '📅 Scheduled Tasks' },
   { to: '/ui/config', label: '⚙️ Configuration' },
   { to: '/ui/logs', label: '📋 Logs' },
   { to: '/ui/memory', label: '🧠 Memory' },
