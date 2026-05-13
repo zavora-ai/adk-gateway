@@ -281,6 +281,7 @@ mod tests {
         let setup = TelemetrySetup {
             json_format: true,
             otel_endpoint: Some("http://localhost:4317".into()),
+            log_dir: None,
         };
         let desc = setup.describe();
         assert!(desc.contains("JSON"));
@@ -292,6 +293,7 @@ mod tests {
         let setup = TelemetrySetup {
             json_format: false,
             otel_endpoint: None,
+            log_dir: None,
         };
         let desc = setup.describe();
         assert!(desc.contains("text"));

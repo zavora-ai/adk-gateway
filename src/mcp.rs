@@ -9,10 +9,47 @@
 //! This module manages the connection lifecycle, status tracking, and
 //! reconciliation logic that the gateway needs on top of that.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use adk_core::{ReadonlyContext, Toolset};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+
+// ─── Minimal ReadonlyContext for tool discovery ────────────────────
+
+/// A no-op [`ReadonlyContext`] used solely for calling `Toolset::tools()`.
+///
+/// The MCP toolset ignores the context parameter (`_ctx`) in its `tools()`
+/// implementation, so this stub satisfies the trait signature without needing
+/// a real agent execution context.
+struct DiscoveryContext;
+
+impl ReadonlyContext for DiscoveryContext {
+    fn invocation_id(&self) -> &str {
+        "discovery"
+    }
+    fn agent_name(&self) -> &str {
+        "gateway"
+    }
+    fn user_id(&self) -> &str {
+        "system"
+    }
+    fn app_name(&self) -> &str {
+        "adk-gateway"
+    }
+    fn session_id(&self) -> &str {
+        "discovery"
+    }
+    fn branch(&self) -> &str {
+        "main"
+    }
+    fn user_content(&self) -> &adk_core::types::Content {
+        static EMPTY: std::sync::LazyLock<adk_core::types::Content> =
+            std::sync::LazyLock::new(|| adk_core::types::Content::new("user"));
+        &EMPTY
+    }
+}
 
 // ─── McpServerConfig ───────────────────────────────────────────────
 
@@ -195,18 +232,40 @@ impl McpConnectionManager {
                         let status = manager.server_status(&config.server_id).await;
                         let is_running = matches!(status, Ok(adk_tool::mcp::ServerStatus::Running));
 
-                        conn.status = if is_running {
-                            ConnectionStatus::Connected
-                        } else {
-                            ConnectionStatus::Failed
-                        };
-                        conn.reconnect_attempts = 0;
+                        if is_running {
+                            conn.status = ConnectionStatus::Connected;
+                            conn.reconnect_attempts = 0;
 
-                        tracing::info!(
-                            server_id = %config.server_id,
-                            running = is_running,
-                            "MCP server started via stdio"
-                        );
+                            // Discover tools via Toolset::tools()
+                            let ctx: Arc<dyn ReadonlyContext> = Arc::new(DiscoveryContext);
+                            match manager.tools(ctx).await {
+                                Ok(tools) => {
+                                    conn.discovered_tools = tools
+                                        .iter()
+                                        .map(|t| t.name().to_string())
+                                        .collect();
+                                    tracing::info!(
+                                        server_id = %config.server_id,
+                                        tool_count = conn.discovered_tools.len(),
+                                        tools = ?conn.discovered_tools,
+                                        "MCP server connected, tools discovered"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        server_id = %config.server_id,
+                                        error = %e,
+                                        "MCP server running but tool discovery failed"
+                                    );
+                                }
+                            }
+                        } else {
+                            conn.status = ConnectionStatus::Failed;
+                            tracing::warn!(
+                                server_id = %config.server_id,
+                                "MCP server started but not in Running state"
+                            );
+                        }
                     }
                     Err(e) => {
                         conn.status = ConnectionStatus::Failed;
