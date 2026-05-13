@@ -210,6 +210,22 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
     // The management tools require subsystem references that are only available
     // after gateway_state::build(). We rebuild the root agent with them attached.
     if !state.agent_management_tools.is_empty() {
+        // Inject MCP tool awareness into the instruction
+        let mcp_server_ids = state.mcp_manager.server_ids();
+        if !mcp_server_ids.is_empty() {
+            let mut mcp_section = String::from("\n\n## MCP Tools (External Integrations)\n\nThe following MCP servers are connected with their available tools:\n\n");
+            for server_id in &mcp_server_ids {
+                let tools = state.mcp_manager.discovered_tools(server_id);
+                if tools.is_empty() {
+                    mcp_section.push_str(&format!("- **{}** — connected (no tools discovered)\n", server_id));
+                } else {
+                    mcp_section.push_str(&format!("- **{}** — {} tools: {}\n", server_id, tools.len(), tools.join(", ")));
+                }
+            }
+            mcp_section.push_str("\nThese tools are available via the MCP protocol. You can call them by name when relevant to the user's request.\n");
+            full_instruction.push_str(&mcp_section);
+        }
+
         let mut rebuilt_builder = LlmAgentBuilder::new("assistant")
             .model(state.fallback_chain.primary().clone())
             .instruction(&full_instruction);
