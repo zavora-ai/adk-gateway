@@ -181,6 +181,8 @@ pub fn backoff_duration(attempt: u32) -> Duration {
 /// and hot-reload reconciliation.
 pub struct McpConnectionManager {
     connections: DashMap<String, McpConnection>,
+    /// Live McpServerManager instances that implement Toolset for agent use.
+    managers: DashMap<String, Arc<adk_tool::mcp::McpServerManager>>,
 }
 
 impl McpConnectionManager {
@@ -188,6 +190,7 @@ impl McpConnectionManager {
     pub fn new() -> Self {
         Self {
             connections: DashMap::new(),
+            managers: DashMap::new(),
         }
     }
 
@@ -259,6 +262,9 @@ impl McpConnectionManager {
                                     );
                                 }
                             }
+
+                            // Store the manager for agent tool execution
+                            self.managers.insert(config.server_id.clone(), Arc::new(manager));
                         } else {
                             conn.status = ConnectionStatus::Failed;
                             tracing::warn!(
@@ -295,6 +301,7 @@ impl McpConnectionManager {
 
     /// Disconnect from an MCP server, removing it from the manager.
     pub fn disconnect(&self, server_id: &str) {
+        self.managers.remove(server_id);
         if let Some((_, mut conn)) = self.connections.remove(server_id) {
             conn.status = ConnectionStatus::Disconnected;
             tracing::info!(server_id = %server_id, "MCP server disconnected");
@@ -370,6 +377,15 @@ impl McpConnectionManager {
     /// Return all currently tracked server IDs.
     pub fn server_ids(&self) -> Vec<String> {
         self.connections.iter().map(|e| e.key().clone()).collect()
+    }
+
+    /// Return all live McpServerManager instances as Arc<dyn Toolset> for agent use.
+    /// These implement the Toolset trait and can be attached to agents via `.toolset()`.
+    pub fn toolsets(&self) -> Vec<Arc<dyn Toolset>> {
+        self.managers
+            .iter()
+            .map(|entry| entry.value().clone() as Arc<dyn Toolset>)
+            .collect()
     }
 
     /// Return the number of tracked connections.

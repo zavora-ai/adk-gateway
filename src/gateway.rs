@@ -243,6 +243,15 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
             rebuilt_builder = rebuilt_builder.tool(tool.clone());
         }
 
+        // Attach MCP toolsets so the agent can call MCP tools directly
+        let mcp_toolsets = state.mcp_manager.toolsets();
+        for toolset in &mcp_toolsets {
+            rebuilt_builder = rebuilt_builder.toolset(toolset.clone());
+        }
+        if !mcp_toolsets.is_empty() {
+            tracing::info!("attached {} MCP toolsets to root agent", mcp_toolsets.len());
+        }
+
         let rebuilt_agent: Arc<dyn Agent> = Arc::new(rebuilt_builder.build()?);
         state
             .agents
