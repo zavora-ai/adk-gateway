@@ -132,7 +132,7 @@ impl AccessControl {
 
 // ── System Tools ───────────────────────────────────────────────────
 
-/// The 6 agent management tool names that are admin-only.
+/// The agent management and scheduled task tool names that are admin-only.
 pub const SYSTEM_TOOLS: &[&str] = &[
     "agent_create",
     "agent_start",
@@ -140,6 +140,10 @@ pub const SYSTEM_TOOLS: &[&str] = &[
     "agent_delete",
     "agent_list",
     "agent_configure",
+    "task_list",
+    "task_create",
+    "task_cancel",
+    "task_delete",
 ];
 
 // ── RbacBridge ─────────────────────────────────────────────────────

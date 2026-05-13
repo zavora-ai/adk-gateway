@@ -1055,3 +1055,212 @@ fn agent_configure_tool(
         },
     )
 }
+
+// ── Scheduled Task Tools ───────────────────────────────────────────
+
+/// Build executable scheduled task tools.
+pub fn build_scheduled_task_tools(
+    cron_scheduler: Arc<tokio::sync::Mutex<Option<crate::cron::CronScheduler>>>,
+    config: Arc<ArcSwap<crate::config::GatewayConfig>>,
+    config_path: PathBuf,
+) -> Vec<Arc<dyn adk_core::Tool>> {
+    vec![
+        Arc::new(task_list_tool(cron_scheduler.clone())),
+        Arc::new(task_create_tool(
+            cron_scheduler.clone(),
+            config.clone(),
+            config_path.clone(),
+        )),
+        Arc::new(task_cancel_tool(cron_scheduler.clone())),
+        Arc::new(task_delete_tool(
+            cron_scheduler.clone(),
+            config.clone(),
+            config_path,
+        )),
+    ]
+}
+
+fn task_list_tool(
+    scheduler: Arc<tokio::sync::Mutex<Option<crate::cron::CronScheduler>>>,
+) -> FunctionTool {
+    FunctionTool::new(
+        "task_list",
+        "List all scheduled tasks (cron jobs) with their ID, schedule, message, delivery target, and status.",
+        move |_ctx: Arc<dyn ToolContext>, _args: Value| {
+            let scheduler = scheduler.clone();
+            async move {
+                let guard = scheduler.lock().await;
+                let jobs: Vec<Value> = match guard.as_ref() {
+                    Some(sched) => {
+                        sched.list_all_jobs().iter().map(|(job, status)| {
+                            serde_json::json!({
+                                "id": job.id,
+                                "schedule": job.schedule,
+                                "message": job.message,
+                                "delivery": job.deliver_to.as_ref().map(|d| serde_json::json!({
+                                    "channel": d.channel,
+                                    "target": d.target,
+                                })),
+                                "status": format!("{:?}", status),
+                            })
+                        }).collect()
+                    }
+                    None => vec![],
+                };
+
+                Ok(serde_json::json!({
+                    "tasks": jobs,
+                    "count": jobs.len()
+                }))
+            }
+        },
+    )
+    .with_read_only(true)
+}
+
+fn task_create_tool(
+    scheduler: Arc<tokio::sync::Mutex<Option<crate::cron::CronScheduler>>>,
+    config: Arc<ArcSwap<crate::config::GatewayConfig>>,
+    config_path: PathBuf,
+) -> FunctionTool {
+    FunctionTool::new(
+        "task_create",
+        "Create a new scheduled task. Required: id (unique string), schedule (e.g. '@every 5m', '@every 1h'), message (text to send or 'ask:prompt' for agent processing). Optional: delivery (object with 'channel' and 'target' fields).",
+        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+            let scheduler = scheduler.clone();
+            let config = config.clone();
+            let config_path = config_path.clone();
+            async move {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                let schedule = args.get("schedule").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+
+                if id.is_empty() || schedule.is_empty() || message.is_empty() {
+                    return Err(adk_core::AdkError::tool(
+                        "Required fields: 'id', 'schedule', 'message'".to_string()
+                    ));
+                }
+
+                let delivery = args.get("delivery").and_then(|d| {
+                    let channel = d.get("channel")?.as_str()?.to_string();
+                    let target = d.get("target")?.as_str()?.to_string();
+                    if channel.is_empty() { return None; }
+                    Some(crate::config::CronDelivery { channel, target })
+                });
+
+                let new_job = crate::config::CronJob {
+                    id: id.clone(),
+                    schedule: schedule.clone(),
+                    message: message.clone(),
+                    deliver_to: delivery,
+                };
+
+                // Persist to config
+                let mut cfg = config.load().as_ref().clone();
+                if cfg.cron.jobs.iter().any(|j| j.id == id) {
+                    return Err(adk_core::AdkError::tool(
+                        format!("Task with ID '{}' already exists", id)
+                    ));
+                }
+                cfg.cron.jobs.push(new_job.clone());
+
+                let output = serde_json::to_string_pretty(&cfg)
+                    .map_err(|e| adk_core::AdkError::tool(format!("Serialize error: {e}")))?;
+                std::fs::write(&config_path, &output)
+                    .map_err(|e| adk_core::AdkError::tool(format!("Write error: {e}")))?;
+
+                // Hot-reload
+                config.store(std::sync::Arc::new(cfg.clone()));
+                let mut guard = scheduler.lock().await;
+                if let Some(sched) = guard.as_mut() {
+                    sched.reconcile(&cfg.cron.jobs);
+                }
+
+                Ok(serde_json::json!({
+                    "created": true,
+                    "id": id,
+                    "schedule": schedule,
+                    "message": message
+                }))
+            }
+        },
+    )
+}
+
+fn task_cancel_tool(
+    scheduler: Arc<tokio::sync::Mutex<Option<crate::cron::CronScheduler>>>,
+) -> FunctionTool {
+    FunctionTool::new(
+        "task_cancel",
+        "Cancel (pause) a running scheduled task by ID. The task remains in config but stops firing.",
+        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+            let scheduler = scheduler.clone();
+            async move {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                if id.is_empty() {
+                    return Err(adk_core::AdkError::tool("'id' is required".to_string()));
+                }
+
+                let mut guard = scheduler.lock().await;
+                if let Some(sched) = guard.as_mut() {
+                    sched.cancel(&id);
+                }
+
+                Ok(serde_json::json!({
+                    "cancelled": true,
+                    "id": id
+                }))
+            }
+        },
+    )
+}
+
+fn task_delete_tool(
+    scheduler: Arc<tokio::sync::Mutex<Option<crate::cron::CronScheduler>>>,
+    config: Arc<ArcSwap<crate::config::GatewayConfig>>,
+    config_path: PathBuf,
+) -> FunctionTool {
+    FunctionTool::new(
+        "task_delete",
+        "Permanently delete a scheduled task by ID. Removes it from config and stops it if running.",
+        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+            let scheduler = scheduler.clone();
+            let config = config.clone();
+            let config_path = config_path.clone();
+            async move {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                if id.is_empty() {
+                    return Err(adk_core::AdkError::tool("'id' is required".to_string()));
+                }
+
+                // Remove from config
+                let mut cfg = config.load().as_ref().clone();
+                let before = cfg.cron.jobs.len();
+                cfg.cron.jobs.retain(|j| j.id != id);
+
+                if cfg.cron.jobs.len() == before {
+                    return Err(adk_core::AdkError::tool(
+                        format!("Task '{}' not found", id)
+                    ));
+                }
+
+                let output = serde_json::to_string_pretty(&cfg)
+                    .map_err(|e| adk_core::AdkError::tool(format!("Serialize error: {e}")))?;
+                std::fs::write(&config_path, &output)
+                    .map_err(|e| adk_core::AdkError::tool(format!("Write error: {e}")))?;
+
+                // Hot-reload
+                config.store(std::sync::Arc::new(cfg.clone()));
+                let mut guard = scheduler.lock().await;
+                if let Some(sched) = guard.as_mut() {
+                    sched.reconcile(&cfg.cron.jobs);
+                }
+
+                Ok(serde_json::json!({
+                    "deleted": true,
+                    "id": id
+                }))
+            }
+        },
+    )
+}

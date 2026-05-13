@@ -404,6 +404,10 @@ pub async fn build(
             "agent_delete".to_string(),
             "agent_list".to_string(),
             "agent_configure".to_string(),
+            "task_list".to_string(),
+            "task_create".to_string(),
+            "task_cancel".to_string(),
+            "task_delete".to_string(),
         ],
         action_nodes: vec![],
         workflow_edges: vec![],
@@ -476,6 +480,18 @@ pub async fn build(
     }
     tracing::info!("registered 6 agent management tools on system agent");
 
+    // Register the 4 scheduled task tools in the tool registry
+    let task_tools = [
+        ("task_list", "List all scheduled tasks with their status"),
+        ("task_create", "Create a new scheduled task (cron job)"),
+        ("task_cancel", "Cancel (pause) a running scheduled task"),
+        ("task_delete", "Permanently delete a scheduled task"),
+    ];
+    for (name, desc) in &task_tools {
+        tool_registry.register_custom(crate::tool_registry::ToolEntry::new(*name, *desc, None));
+    }
+    tracing::info!("registered 4 scheduled task tools on system agent");
+
     // ── AWP protocol state ─────────────────────────────────────────
     let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
     let awp_state = crate::awp::build_awp_state(&config.awp, config_dir).await?;
@@ -513,7 +529,7 @@ pub async fn build(
         .unwrap_or_else(|| Arc::new(crate::tool_registry::ToolRegistry::new()));
 
     // Build all 6 executable agent management tools with full subsystem wiring
-    let agent_management_tools = crate::executable_tools::build_agent_management_tools(
+    let mut agent_management_tools = crate::executable_tools::build_agent_management_tools(
         agent_registry.clone(),
         process_manager.clone(),
         proxy_pool.clone(),
@@ -528,6 +544,18 @@ pub async fn build(
         "built {} executable agent management tools",
         agent_management_tools.len()
     );
+
+    // Build 4 scheduled task tools and append to the management tools
+    let scheduled_task_tools = crate::executable_tools::build_scheduled_task_tools(
+        cron_scheduler.clone(),
+        Arc::new(ArcSwap::from_pointee(config.clone())),
+        config_path.clone(),
+    );
+    tracing::info!(
+        "built {} scheduled task tools",
+        scheduled_task_tools.len()
+    );
+    agent_management_tools.extend(scheduled_task_tools);
 
     Ok(GatewayState {
         config: Arc::new(ArcSwap::from_pointee(config.clone())),
