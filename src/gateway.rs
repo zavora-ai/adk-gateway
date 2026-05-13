@@ -156,7 +156,11 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
     }
 
     // Build KG early so we can attach executable tools to the agent
-    let knowledge_graph = Arc::new(crate::knowledge_graph::KnowledgeGraph::new());
+    let kg_db_path = config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("knowledge_graph.db");
+    let knowledge_graph = Arc::new(crate::knowledge_graph::KnowledgeGraph::with_persistence(kg_db_path));
 
     // Build agent with executable tools when available
     let mut agent_builder = LlmAgentBuilder::new("assistant")

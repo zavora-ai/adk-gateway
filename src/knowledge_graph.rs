@@ -6,12 +6,13 @@
 //! - search_nodes, open_nodes, read_graph
 //!
 //! All operations are scoped by `user_id` for isolation (R24.15).
-//! Thread-safe via `DashMap`.
+//! Thread-safe via `DashMap`. Optionally backed by SQLite for persistence.
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 // ── Data Types ─────────────────────────────────────────────────────
 
@@ -74,10 +75,13 @@ struct UserGraph {
 // ── KnowledgeGraph ─────────────────────────────────────────────────
 
 /// Thread-safe, per-user knowledge graph store.
+/// Optionally backed by SQLite for persistence across restarts.
 #[derive(Debug)]
 pub struct KnowledgeGraph {
     graphs: DashMap<String, Arc<UserGraph>>,
     next_id: AtomicU64,
+    /// SQLite connection for persistence. None = in-memory only.
+    db: Option<Mutex<rusqlite::Connection>>,
 }
 
 impl Default for KnowledgeGraph {
@@ -87,11 +91,149 @@ impl Default for KnowledgeGraph {
 }
 
 impl KnowledgeGraph {
+    /// Create a new in-memory-only knowledge graph (no persistence).
     pub fn new() -> Self {
         Self {
             graphs: DashMap::new(),
             next_id: AtomicU64::new(1),
+            db: None,
         }
+    }
+
+    /// Create a knowledge graph backed by SQLite at the given path.
+    /// Loads existing data from disk on creation.
+    pub fn with_persistence(db_path: PathBuf) -> Self {
+        let conn = match rusqlite::Connection::open(&db_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(path = %db_path.display(), error = %e, "failed to open KG database, falling back to in-memory");
+                return Self::new();
+            }
+        };
+
+        // Create tables
+        if let Err(e) = conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS entities (
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                PRIMARY KEY (user_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS observations (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                entity_name TEXT NOT NULL,
+                content TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS relations (
+                id INTEGER PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                target TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_obs_user_entity ON observations(user_id, entity_name);
+            CREATE INDEX IF NOT EXISTS idx_rel_user ON relations(user_id);",
+        ) {
+            tracing::error!(error = %e, "failed to create KG tables, falling back to in-memory");
+            return Self::new();
+        }
+
+        let mut kg = Self {
+            graphs: DashMap::new(),
+            next_id: AtomicU64::new(1),
+            db: Some(Mutex::new(conn)),
+        };
+
+        // Load existing data
+        kg.load_from_db();
+
+        let user_count = kg.graphs.len();
+        let entity_count: usize = kg.graphs.iter().map(|g| g.value().entities.len()).sum();
+        tracing::info!(
+            path = %db_path.display(),
+            users = user_count,
+            entities = entity_count,
+            "knowledge graph loaded from SQLite"
+        );
+
+        kg
+    }
+
+    /// Load all data from SQLite into the in-memory DashMap.
+    fn load_from_db(&mut self) {
+        let db = match &self.db {
+            Some(db) => db.lock().unwrap(),
+            None => return,
+        };
+
+        // Load entities
+        let mut stmt = db.prepare("SELECT user_id, name, entity_type FROM entities").unwrap();
+        let entity_rows: Vec<(String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (user_id, name, entity_type) in &entity_rows {
+            let graph = self.graphs
+                .entry(user_id.clone())
+                .or_insert_with(|| Arc::new(UserGraph::default()))
+                .clone();
+            graph.entities.entry(name.clone()).or_insert_with(|| Entity {
+                name: name.clone(),
+                entity_type: entity_type.clone(),
+                observations: Vec::new(),
+            });
+        }
+
+        // Load observations
+        let mut stmt = db.prepare("SELECT id, user_id, entity_name, content FROM observations ORDER BY id").unwrap();
+        let obs_rows: Vec<(u64, String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)? as u64, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let mut max_id: u64 = 0;
+        for (id, user_id, entity_name, content) in obs_rows {
+            max_id = max_id.max(id);
+            if let Some(graph) = self.graphs.get(&user_id) {
+                if let Some(mut entity) = graph.entities.get_mut(&entity_name) {
+                    entity.observations.push(Observation { id, content });
+                }
+            }
+        }
+
+        // Load relations
+        let mut stmt = db.prepare("SELECT id, user_id, source, relation_type, target FROM relations").unwrap();
+        let rel_rows: Vec<(u64, String, String, String, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)? as u64,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (id, user_id, source, relation_type, target) in rel_rows {
+            max_id = max_id.max(id);
+            if let Some(graph) = self.graphs.get(&user_id) {
+                graph.relations.insert(id, Relation { id, source, relation_type, target });
+            }
+        }
+
+        // Set next_id past the highest loaded ID
+        self.next_id.store(max_id + 1, Ordering::Relaxed);
     }
 
     fn next_id(&self) -> u64 {
@@ -103,6 +245,103 @@ impl KnowledgeGraph {
             .entry(user_id.to_string())
             .or_insert_with(|| Arc::new(UserGraph::default()))
             .clone()
+    }
+
+    /// Persist an entity to SQLite (upsert).
+    fn db_upsert_entity(&self, user_id: &str, name: &str, entity_type: &str) {
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO entities (user_id, name, entity_type) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![user_id, name, entity_type],
+                );
+            }
+        }
+    }
+
+    /// Persist an observation to SQLite.
+    fn db_insert_observation(&self, id: u64, user_id: &str, entity_name: &str, content: &str) {
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO observations (id, user_id, entity_name, content) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![id as i64, user_id, entity_name, content],
+                );
+            }
+        }
+    }
+
+    /// Persist a relation to SQLite.
+    fn db_insert_relation(&self, id: u64, user_id: &str, source: &str, relation_type: &str, target: &str) {
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                let _ = conn.execute(
+                    "INSERT OR REPLACE INTO relations (id, user_id, source, relation_type, target) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![id as i64, user_id, source, relation_type, target],
+                );
+            }
+        }
+    }
+
+    /// Delete an entity from SQLite.
+    fn db_delete_entity(&self, user_id: &str, name: &str) {
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                let _ = conn.execute(
+                    "DELETE FROM entities WHERE user_id = ?1 AND name = ?2",
+                    rusqlite::params![user_id, name],
+                );
+                let _ = conn.execute(
+                    "DELETE FROM observations WHERE user_id = ?1 AND entity_name = ?2",
+                    rusqlite::params![user_id, name],
+                );
+                let _ = conn.execute(
+                    "DELETE FROM relations WHERE user_id = ?1 AND (source = ?2 OR target = ?2)",
+                    rusqlite::params![user_id, name],
+                );
+            }
+        }
+    }
+
+    /// Delete observations by ID from SQLite.
+    fn db_delete_observations(&self, ids: &[u64]) {
+        if ids.is_empty() { return; }
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                for id in ids {
+                    let _ = conn.execute(
+                        "DELETE FROM observations WHERE id = ?1",
+                        rusqlite::params![*id as i64],
+                    );
+                }
+            }
+        }
+    }
+
+    /// Delete relations by ID from SQLite.
+    fn db_delete_relations(&self, ids: &[u64]) {
+        if ids.is_empty() { return; }
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                for id in ids {
+                    let _ = conn.execute(
+                        "DELETE FROM relations WHERE id = ?1",
+                        rusqlite::params![*id as i64],
+                    );
+                }
+            }
+        }
+    }
+
+    /// Delete all data for a user from SQLite.
+    fn db_delete_user(&self, user_id: &str) {
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.lock() {
+                let _ = conn.execute("DELETE FROM entities WHERE user_id = ?1", rusqlite::params![user_id]);
+                let _ = conn.execute("DELETE FROM observations WHERE user_id = ?1", rusqlite::params![user_id]);
+                let _ = conn.execute("DELETE FROM relations WHERE user_id = ?1", rusqlite::params![user_id]);
+            }
+        }
     }
 
     // ── Create Operations ──────────────────────────────────────────
@@ -122,6 +361,13 @@ impl KnowledgeGraph {
                     content,
                 })
                 .collect();
+
+            // Persist entity
+            self.db_upsert_entity(user_id, &input.name, &input.entity_type);
+            // Persist observations
+            for obs in &observations {
+                self.db_insert_observation(obs.id, user_id, &input.name, &obs.content);
+            }
 
             graph
                 .entities
@@ -148,6 +394,7 @@ impl KnowledgeGraph {
 
         for input in inputs {
             let id = self.next_id();
+            self.db_insert_relation(id, user_id, &input.source, &input.relation_type, &input.target);
             graph.relations.insert(
                 id,
                 Relation {
@@ -177,6 +424,7 @@ impl KnowledgeGraph {
 
         for content in contents {
             let id = self.next_id();
+            self.db_insert_observation(id, user_id, entity_name, &content);
             entry.observations.push(Observation { id, content });
             ids.push(id);
         }
@@ -201,9 +449,11 @@ impl KnowledgeGraph {
                     .filter(|r| r.source == name || r.target == name)
                     .map(|r| r.id)
                     .collect();
-                for rid in to_remove {
-                    graph.relations.remove(&rid);
+                for rid in &to_remove {
+                    graph.relations.remove(rid);
                 }
+                // Persist deletions
+                self.db_delete_entity(user_id, &name);
                 deleted.push(name);
             }
         }
@@ -235,6 +485,10 @@ impl KnowledgeGraph {
         // Deduplicate (an ID can only belong to one entity)
         deleted.sort();
         deleted.dedup();
+
+        // Persist deletions
+        self.db_delete_observations(&deleted);
+
         deleted
     }
 
@@ -249,6 +503,9 @@ impl KnowledgeGraph {
                 deleted.push(id);
             }
         }
+
+        // Persist deletions
+        self.db_delete_relations(&deleted);
 
         deleted
     }
@@ -351,7 +608,11 @@ impl KnowledgeGraph {
 
     /// Delete the entire knowledge graph for a user (R24.19).
     pub fn delete_user_graph(&self, user_id: &str) -> bool {
-        self.graphs.remove(user_id).is_some()
+        let removed = self.graphs.remove(user_id).is_some();
+        if removed {
+            self.db_delete_user(user_id);
+        }
+        removed
     }
 
     /// Build a compact summary of all entities for a user.
@@ -408,14 +669,17 @@ impl KnowledgeGraph {
     pub fn trim_observations(&self, user_id: &str, max_per_entity: usize) -> usize {
         let graph = self.user_graph(user_id);
         let mut removed = 0;
+        let mut removed_ids = Vec::new();
         for mut entry in graph.entities.iter_mut() {
             let len = entry.observations.len();
             if len > max_per_entity {
                 let excess = len - max_per_entity;
-                entry.observations.drain(0..excess);
+                let drained: Vec<Observation> = entry.observations.drain(0..excess).collect();
+                removed_ids.extend(drained.iter().map(|o| o.id));
                 removed += excess;
             }
         }
+        self.db_delete_observations(&removed_ids);
         removed
     }
 }
