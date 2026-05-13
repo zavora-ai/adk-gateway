@@ -1379,6 +1379,11 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     // ── Fallback chain integration (R16, Task 4.2) ─────────────────
     // When no fallbacks are configured, use the direct call path (zero overhead).
     // When fallbacks exist, wrap with run_with_fallback to retry on failure.
+    tracing::info!(
+        user = %user_id,
+        model = %state.fallback_chain.primary().model_id(),
+        "sending LLM request"
+    );
     let stream = if !state.fallback_chain.has_fallbacks() {
         // Direct path — no fallback overhead (backward compat)
         match runner.run(uid, sid, content).await {
@@ -1563,11 +1568,22 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     let latency = start.elapsed();
     let tool_call_count = collected.tool_calls.len();
     let stream_duration = collected.duration;
+
+    // Log individual tool calls for debugging
+    for tc in &collected.tool_calls {
+        tracing::info!(
+            tool = %tc.name,
+            args = %tc.args,
+            "tool called"
+        );
+    }
+
     tracing::info!(
         channel = %channel_name,
         latency_ms = %latency.as_millis(),
         stream_duration_ms = %stream_duration.as_millis(),
         tool_call_count = tool_call_count,
+        tools = ?collected.tool_calls.iter().map(|tc| tc.name.as_str()).collect::<Vec<_>>(),
         "message processed"
     );
     state.metrics.record_message(
