@@ -113,7 +113,7 @@ impl SkillLoader {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!(dir = %dir.display(), error = %e, "cannot read skills directory");
+                tracing::debug!(dir = %dir.display(), error = %e, "skills directory not found (optional)");
                 return docs;
             }
         };
