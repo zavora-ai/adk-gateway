@@ -226,6 +226,29 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
             full_instruction.push_str(&mcp_section);
         }
 
+        // Inject directory context so the agent knows where things are
+        {
+            let workspace_root = config_path.parent().unwrap_or(std::path::Path::new("."));
+            let project_dir = std::env::current_dir().unwrap_or_default();
+            let log_dir = project_dir.join("logs");
+            let dir_context = format!(
+                "\n\n## System Paths\n\n\
+                - **Workspace root** (fs_pwd, config location): `{}`\n\
+                - **Gateway project directory**: `{}`\n\
+                - **Log files**: `{}`\n\
+                - **Config file**: `{}`\n\
+                - **Knowledge graph DB**: `{}`\n\n\
+                When asked about logs, files, or the project, use these paths. \
+                The filesystem tools (fs_list, fs_read, etc.) accept absolute paths.\n",
+                workspace_root.display(),
+                project_dir.display(),
+                log_dir.display(),
+                config_path.display(),
+                workspace_root.join("knowledge_graph.db").display(),
+            );
+            full_instruction.push_str(&dir_context);
+        }
+
         let mut rebuilt_builder = LlmAgentBuilder::new("assistant")
             .model(state.fallback_chain.primary().clone())
             .instruction(&full_instruction);
