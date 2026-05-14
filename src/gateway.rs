@@ -1616,11 +1616,36 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     };
     let delivery_strategy: Option<(Arc<dyn DeliveryStrategy>, MessageRef)> =
         state.channel_map.get(&key).map(|ch| {
-            let recipient = if msg.is_group {
+            let mut recipient = if msg.is_group {
                 msg.group_id.clone().unwrap_or(msg.sender_id.clone())
             } else {
                 msg.sender_id.clone()
             };
+
+            // For cron messages: if recipient is non-numeric (username like @bot),
+            // resolve to the first paired user on this channel type.
+            if matches!(msg.source, crate::channel::MessageSource::Cron { .. }) {
+                let is_numeric = recipient.chars().all(|c| c.is_ascii_digit());
+                if !is_numeric {
+                    let paired = state.pairing_service.paired_users();
+                    let channel_str = format!("{}", msg.channel_type);
+                    if let Some(user) = paired.iter().find(|u| u.channel_type == channel_str) {
+                        tracing::info!(
+                            original_target = %recipient,
+                            resolved_to = %user.user_id,
+                            "cron delivery: resolved non-numeric target to paired user"
+                        );
+                        recipient = user.user_id.clone();
+                    } else {
+                        tracing::warn!(
+                            target = %recipient,
+                            channel = %msg.channel_type,
+                            "cron delivery: no paired users found for channel, delivery may fail"
+                        );
+                    }
+                }
+            }
+
             let cfg = state.config.load();
             let stream_mode = resolve_stream_mode(&cfg, msg.channel_type);
             let strategy = delivery::select_strategy(ch.value().clone(), stream_mode.as_deref());
