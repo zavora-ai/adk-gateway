@@ -31,15 +31,22 @@ Config is saved to `~/.openclaw/openclaw.json` and hot-reloads on edit.
 - **14 LLM Providers** — Gemini, Claude, GPT, Ollama, DeepSeek, Groq, OpenRouter, and more
 - **Fallback Chains** — Automatic retry across multiple models on failure
 - **Multi-Agent** — Create, start, stop, configure specialist agents at runtime
-- **Memory** — Per-user knowledge graph with entity extraction and search
+- **Persistent Memory** — SQLite-backed knowledge graph with entity extraction and search (survives restarts)
 - **RAG** — Document ingestion with vector/hybrid/filtered search
 - **Graph Workflows** — DAG-based execution with agent nodes, action nodes, conditional routing
-- **Access Control** — DM policies, RBAC, role-based tool access, JWT/SSO
-- **MCP Integration** — Connect external tool servers via Model Context Protocol
+- **Scheduled Tasks** — Cron-style jobs with agent prompts, delivery targets, suppress keywords, activity logs
+- **System Heartbeat** — Auto-created hourly check-in with configurable suppress keyword
+- **MCP Integration** — Connect external tool servers (computer-use, browser, media) via Model Context Protocol
+- **108 Agent Tools** — Filesystem, KG, agents, tasks, MCP tools, send_photo, all callable by the LLM
+- **Access Control** — DM pairing, RBAC, role-based tool access, JWT/SSO
 - **AWP Protocol** — Make your gateway discoverable by other AI agents
-- **Real-Time UI** — WebSocket-powered control panel with 13 pages
+- **Real-Time UI** — WebSocket-powered control panel with 14 pages
 - **Hot-Reload** — Edit config, changes apply without restart
 - **Session Backends** — In-memory, SQLite, Postgres, Redis, Firestore
+- **Typing Indicators** — Persistent typing bubble during processing
+- **Progress Messages** — Tool execution updates sent to user during long operations
+- **Cancel Support** — `/stop` command cancels in-flight requests
+- **Image Delivery** — `send_photo` tool sends images directly to Telegram
 
 ## Control Panel
 
@@ -48,13 +55,14 @@ A React + TypeScript SPA at `/ui` with:
 | Page | What it does |
 |---|---|
 | **Setup Wizard** | First-run guided configuration |
-| **Dashboard** | Metrics, channel status, live WebSocket updates |
-| **Agent & Model** | Model presets, fallback chains, API keys, cloud providers |
+| **Dashboard** | Metrics, channel status, pairing code, live WebSocket updates |
+| **Model Providers** | Model presets, fallback chains, API keys, configured providers sidebar |
 | **Agents** | Multi-agent lifecycle — create, start, stop, configure, delegation permissions |
-| **Channels** | Configure all 5 channels with test connection |
+| **Channels** | Configure all 5 channels with pairing and test connection |
 | **Sessions** | Active sessions with terminate |
 | **AWP** | Health, capabilities, subscriptions, consent |
-| **Integrations** | MCP servers, cron jobs, tools |
+| **Integrations** | MCP servers, tools |
+| **Scheduled Tasks** | Create, edit, pause, resume, delete tasks with activity logs and error display |
 | **Configuration** | JSON editor with validation |
 | **Logs** | Real-time streaming with filters |
 | **Memory** | Knowledge graph protocol editor |
@@ -106,6 +114,9 @@ adk-gateway memory search "query" --user-id user1
 adk-gateway rag ingest ./documents/
 adk-gateway rag search "query" --top-k 10
 adk-gateway pairing generate-code
+adk-gateway mcp add --json '{"server": {"command": "npx", "args": ["-y", "pkg"]}}'
+adk-gateway mcp list
+adk-gateway mcp remove <server-id>
 ```
 
 ## Development
@@ -139,12 +150,28 @@ cargo build --release
 
 See [docs/deployment-guide.md](docs/deployment-guide.md) for Docker, systemd, and production setup.
 
+## Agent Tools
+
+The system agent has access to 108+ tools across these categories:
+
+| Category | Tools |
+|----------|-------|
+| **Knowledge Graph** | `kg_create_entities`, `kg_add_observations`, `kg_search_nodes`, `kg_read_graph`, `kg_delete_entities` |
+| **Agents** | `agent_list`, `agent_create`, `agent_start`, `agent_stop`, `agent_delete`, `agent_configure` |
+| **Scheduled Tasks** | `task_list`, `task_create`, `task_cancel`, `task_delete` |
+| **Filesystem** | `fs_pwd`, `fs_list`, `fs_tree`, `fs_read`, `fs_search` |
+| **Media** | `send_photo` |
+| **Computer Use** | 58 tools via MCP (screenshot, click, type, scroll, etc.) |
+| **Browser** | 23 tools via MCP (navigate, click, snapshot, evaluate, etc.) |
+
 ## Current Limitations
 
 | Feature | Status |
 |---|---|
 | Multi-Agent Codegen | Experimental — generates agent binaries but A2A endpoints are placeholder |
 | AWP Commerce | Placeholder — protocol endpoints work, commerce capabilities are declarations only |
+| Max Iterations | Runner hardcoded at 100 — can cause loops with smaller models (timeout at 90s mitigates) |
+| Heartbeat Context | Runs in isolated session — no conversation history (KG context available) |
 
 ## License
 
