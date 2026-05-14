@@ -863,7 +863,7 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
 
 // ── Message processing ─────────────────────────────────────────────
 
-async fn process_message(mut msg: InboundMessage, state: &GatewayState) -> anyhow::Result<()> {
+async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::Result<()> {
     let start = Instant::now();
     let channel_name = msg.channel_type.to_string();
 
