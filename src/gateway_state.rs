@@ -91,6 +91,12 @@ pub struct GatewayState {
     pub fallback_chain: Arc<FallbackModelChain>,
     /// Agent instruction text for rebuilding agents during fallback retry.
     pub agent_instruction: Arc<String>,
+    /// Active request cancellation tokens keyed by sender_id.
+    /// Used to cancel in-flight requests when user sends /stop.
+    pub active_requests: Arc<DashMap<String, CancellationToken>>,
+    /// Progress messages queued by tool callbacks, keyed by user_id.
+    /// The typing loop drains these and sends them to the user.
+    pub progress_messages: Arc<DashMap<String, Vec<String>>>,
 }
 
 /// Build all gateway components from config.
@@ -650,5 +656,7 @@ pub async fn build(
         agent_management_tools,
         fallback_chain,
         agent_instruction: Arc::new(agent_instruction),
+        active_requests: Arc::new(DashMap::new()),
+        progress_messages: Arc::new(DashMap::new()),
     })
 }

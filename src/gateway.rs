@@ -276,6 +276,7 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
         }
 
         // Add observability callbacks for LLM requests and tool calls
+        let progress_map = state.progress_messages.clone();
         rebuilt_builder = rebuilt_builder.before_model_callback(Box::new(
             |_ctx, req| {
                 Box::pin(async move {
@@ -328,14 +329,39 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
         ));
 
         rebuilt_builder = rebuilt_builder.after_tool_callback_full(Box::new(
-            |_ctx, tool, args, result| {
+            move |ctx, tool, args, result| {
+                let progress = progress_map.clone();
                 Box::pin(async move {
+                    let tool_name = tool.name().to_string();
+                    let user_id = ctx.user_id().to_string();
                     tracing::info!(
-                        tool = %tool.name(),
+                        tool = %tool_name,
                         args = %args,
                         result_size = result.to_string().len(),
                         "tool executed"
                     );
+
+                    // Send progress message for user-visible tools
+                    let emoji = match tool_name.as_str() {
+                        name if name.starts_with("fs_") => "📂",
+                        name if name.starts_with("kg_") => "🧠",
+                        name if name.starts_with("browser_") => "🌐",
+                        name if name.starts_with("agent_") => "🤖",
+                        name if name.starts_with("task_") => "📅",
+                        "screenshot" | "snapshot" => "📸",
+                        "open_application" => "🚀",
+                        "run_script" => "⚡",
+                        "left_click" | "right_click" | "double_click" => "🖱️",
+                        "type" | "key" => "⌨️",
+                        "scrape" | "browser_navigate" => "🌐",
+                        _ => "",
+                    };
+
+                    if !emoji.is_empty() {
+                        let msg = format!("{} {}", emoji, tool_name.replace('_', " "));
+                        progress.entry(user_id).or_default().push(msg);
+                    }
+
                     Ok(None) // Don't modify the result
                 })
             },
@@ -804,6 +830,18 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     let start = Instant::now();
     let channel_name = msg.channel_type.to_string();
 
+    // Handle /stop command — cancel any active request for this sender
+    if msg.text.trim().eq_ignore_ascii_case("/stop") || msg.text.trim().eq_ignore_ascii_case("stop") {
+        if let Some((_, token)) = state.active_requests.remove(&msg.sender_id) {
+            token.cancel();
+            send_reply(&msg, state, "⏹ Stopped. Your previous request has been cancelled.").await;
+            tracing::info!(sender = %msg.sender_id, "user cancelled active request via /stop");
+        } else {
+            send_reply(&msg, state, "Nothing running to stop.").await;
+        }
+        return Ok(());
+    }
+
     // Access control
     {
         let ac = state.access_control.read().await;
@@ -889,6 +927,7 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
 
     // Send typing indicator to show the bot is working.
     // Spawn a background task that re-sends typing every 4 seconds until dropped.
+    // Also sends progress messages when tools are being executed.
     let typing_cancel = tokio_util::sync::CancellationToken::new();
     {
         let key = crate::channel::ChannelKey {
@@ -904,14 +943,33 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
             // Send initial typing
             let _ = ch.send_typing(&chat_id).await;
 
-            // Spawn a loop that keeps typing alive every 4s
+            // Spawn a loop that keeps typing alive and sends progress updates
             let channel = ch.value().clone();
             let cancel = typing_cancel.clone();
+            let progress_map = state.progress_messages.clone();
+            let progress_user_id = user_id.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
                         _ = cancel.cancelled() => break,
                         _ = tokio::time::sleep(std::time::Duration::from_secs(4)) => {
+                            // Check for progress messages to send
+                            let messages: Vec<String> = progress_map
+                                .get_mut(&progress_user_id)
+                                .map(|mut entry| entry.value_mut().drain(..).collect())
+                                .unwrap_or_default();
+
+                            for msg_text in messages {
+                                let out = crate::channel::OutboundMessage {
+                                    channel_type: crate::channel::ChannelType::Telegram,
+                                    account_id: String::new(),
+                                    recipient_id: chat_id.clone(),
+                                    text: msg_text,
+                                    reply_to: None,
+                                    is_partial: true,
+                                };
+                                let _ = channel.send(out).await;
+                            }
                             let _ = channel.send_typing(&chat_id).await;
                         }
                     }
@@ -1471,7 +1529,10 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
         }
     }
 
-    // Run agent
+    // Run agent — register cancellation token for /stop support
+    let request_cancel = tokio_util::sync::CancellationToken::new();
+    state.active_requests.insert(msg.sender_id.clone(), request_cancel.clone());
+
     let runner = Runner::new(RunnerConfig {
         app_name: state.session_bridge.app_name().to_string(),
         agent: agent.clone(),
@@ -1484,7 +1545,7 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
         context_cache_config: None,
         cache_capable: None,
         request_context: None,
-        cancellation_token: None,
+        cancellation_token: Some(request_cancel.clone()),
         intra_compaction_config: None,
         intra_compaction_summarizer: None,
     })?;
@@ -1713,6 +1774,11 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
 
     // Stop the typing indicator — response is ready
     typing_cancel.cancel();
+
+    // Remove from active requests (processing complete)
+    state.active_requests.remove(&msg.sender_id);
+    // Clean up any remaining progress messages
+    state.progress_messages.remove(&user_id);
 
     tracing::info!(
         channel = %channel_name,

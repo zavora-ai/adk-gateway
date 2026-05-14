@@ -753,6 +753,8 @@ mod tests {
                 crate::fallback_chain::FallbackModelChain::new_empty_for_test(),
             ),
             agent_instruction: Arc::new(String::new()),
+            active_requests: Arc::new(DashMap::new()),
+            progress_messages: Arc::new(DashMap::new()),
         })
     }
 
