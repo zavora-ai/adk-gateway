@@ -736,7 +736,7 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
                         None => return,
                     };
                     // Per-message timeout to prevent hung operations
-                    let timeout = std::time::Duration::from_secs(300); // 5 minutes
+                    let timeout = std::time::Duration::from_secs(90); // 90 seconds max per message
                     match tokio::time::timeout(timeout, process_message(msg, &state)).await {
                         Ok(Ok(())) => {}
                         Ok(Err(e)) => tracing::error!(error = %e, "failed to process message"),
