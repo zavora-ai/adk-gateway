@@ -421,6 +421,7 @@ pub async fn build(
             "fs_search".to_string(),
             "fs_pwd".to_string(),
             "fs_tree".to_string(),
+            "send_photo".to_string(),
         ],
         action_nodes: vec![],
         workflow_edges: vec![],
@@ -512,6 +513,7 @@ pub async fn build(
         ("fs_tree", "Show directory tree structure with depth control"),
         ("fs_read", "Read the contents of a file"),
         ("fs_search", "Search for files by name pattern"),
+        ("send_photo", "Send a photo/image to the user's Telegram chat"),
     ];
     for (name, desc) in &fs_tool_defs {
         tool_registry.register_custom(crate::tool_registry::ToolEntry::new(*name, *desc, None));
@@ -597,12 +599,18 @@ pub async fn build(
     tracing::info!("built {} filesystem tools", fs_tools.len());
     agent_management_tools.extend(fs_tools);
 
+    // Build channel tools (send_photo) — needs channel_map Arc
+    let channel_map = Arc::new(DashMap::new());
+    let channel_tools = crate::executable_tools::build_channel_tools(channel_map.clone());
+    tracing::info!("built {} channel tools", channel_tools.len());
+    agent_management_tools.extend(channel_tools);
+
     Ok(GatewayState {
         config: Arc::new(ArcSwap::from_pointee(config.clone())),
         session_bridge,
         router,
         session_service,
-        channel_map: Arc::new(DashMap::new()),
+        channel_map,
         agents,
         tool_registry: tool_registry_for_state,
         plugin_manager,

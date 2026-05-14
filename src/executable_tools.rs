@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
+use dashmap::DashMap;
 use tokio::sync::broadcast;
 
 use crate::agent_codegen::AgentCodegen;
@@ -1612,4 +1613,78 @@ fn fs_search_tool(root: PathBuf) -> FunctionTool {
         },
     )
     .with_read_only(true)
+}
+
+// ── Channel Tools (send_photo) ─────────────────────────────────────
+
+/// Build channel interaction tools (send_photo, etc.)
+pub fn build_channel_tools(
+    channel_map: Arc<DashMap<crate::channel::ChannelKey, Arc<dyn crate::channel::Channel>>>,
+) -> Vec<Arc<dyn adk_core::Tool>> {
+    vec![Arc::new(send_photo_tool(channel_map))]
+}
+
+fn send_photo_tool(
+    channel_map: Arc<DashMap<crate::channel::ChannelKey, Arc<dyn crate::channel::Channel>>>,
+) -> FunctionTool {
+    FunctionTool::new(
+        "send_photo",
+        "Send a photo/image to the user's chat. Provide either a file 'path' (absolute path to an image file on disk) or 'base64' (base64-encoded image data). Optional 'caption' text. The image is sent to the current user's Telegram chat.",
+        move |ctx: Arc<dyn ToolContext>, args: Value| {
+            let channel_map = channel_map.clone();
+            async move {
+                let user_id = ctx.user_id().to_string();
+                let caption = args.get("caption").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                // Get image data from either path or base64
+                let (data, mime_type) = if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+                    let path = std::path::Path::new(path_str);
+                    let bytes = std::fs::read(path).map_err(|e| {
+                        adk_core::AdkError::tool(format!("Cannot read file '{}': {e}", path_str))
+                    })?;
+                    let mime = match path.extension().and_then(|e| e.to_str()) {
+                        Some("png") => "image/png",
+                        Some("jpg") | Some("jpeg") => "image/jpeg",
+                        Some("gif") => "image/gif",
+                        Some("webp") => "image/webp",
+                        _ => "image/png",
+                    };
+                    (bytes, mime.to_string())
+                } else if let Some(b64) = args.get("base64").and_then(|v| v.as_str()) {
+                    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64)
+                        .map_err(|e| adk_core::AdkError::tool(format!("Invalid base64: {e}")))?;
+                    let mime = args.get("mime_type").and_then(|v| v.as_str()).unwrap_or("image/png").to_string();
+                    (bytes, mime)
+                } else {
+                    return Err(adk_core::AdkError::tool(
+                        "Either 'path' (file path) or 'base64' (base64 data) is required".to_string()
+                    ));
+                };
+
+                // Extract the numeric chat ID from user_id (format: "telegram:12345")
+                let chat_id = user_id.split(':').last().unwrap_or(&user_id).to_string();
+
+                // Find the telegram channel and send
+                let key = crate::channel::ChannelKey {
+                    channel_type: crate::channel::ChannelType::Telegram,
+                    account_id: "default".to_string(),
+                };
+
+                if let Some(ch) = channel_map.get(&key) {
+                    ch.send_photo(&chat_id, &data, &mime_type, caption.as_deref())
+                        .await
+                        .map_err(|e| adk_core::AdkError::tool(format!("Failed to send photo: {e}")))?;
+
+                    Ok(serde_json::json!({
+                        "sent": true,
+                        "chat_id": chat_id,
+                        "size_bytes": data.len(),
+                        "mime_type": mime_type
+                    }))
+                } else {
+                    Err(adk_core::AdkError::tool("No Telegram channel available".to_string()))
+                }
+            }
+        },
+    )
 }

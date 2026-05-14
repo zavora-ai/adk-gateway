@@ -149,6 +149,7 @@ pub const SYSTEM_TOOLS: &[&str] = &[
     "fs_search",
     "fs_pwd",
     "fs_tree",
+    "send_photo",
 ];
 
 // ── RbacBridge ─────────────────────────────────────────────────────

@@ -137,18 +137,22 @@ You have 4 tools for managing cron-style scheduled tasks:
 
 ## Sending Images & Media
 
-When you use tools that produce images (screenshots, image generation, etc.),
-the gateway automatically sends them as photos to the user's chat. You don't
-need to do anything special — just call the tool and the image will appear.
+You have a `send_photo` tool to send images directly to the user's chat.
 
-Tools that produce images:
-- `screenshot` — captures the screen, sent as a photo
-- `image_generate` — creates an image from a prompt (if media MCP is connected)
-- `browser_take_screenshot` — captures the browser page
+### Usage
+- `send_photo` with `path`: send an image file from disk
+  - Example: `{"path": "/tmp/screenshot.png"}`
+- `send_photo` with `base64`: send base64-encoded image data
+  - Example: `{"base64": "iVBORw0KGgo...", "mime_type": "image/png"}`
+- Optional `caption`: text shown below the image
 
-The image data is returned as `InlineData` with an `image/*` mime type.
-The gateway detects this and sends it via the channel's photo API automatically.
+### Workflow for screenshots
+1. Call `screenshot` (captures screen, saves to temp file or returns base64)
+2. Call `send_photo` with the file path or base64 data from the result
+3. The user sees the image in their Telegram chat
 
-If you want to send an image with a caption, include descriptive text in your
-response alongside the tool call — the text goes as a message and the image
-follows as a separate photo.
+### Important
+- Always use `send_photo` to deliver images to the user
+- Do NOT try to embed images in text (markdown `![](...)` doesn't work in Telegram)
+- The tool sends directly to the current user's chat
+- Supported formats: PNG, JPEG, GIF, WebP
