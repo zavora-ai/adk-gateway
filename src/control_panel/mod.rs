@@ -137,6 +137,8 @@ pub struct ControlPanelState {
     pub mcp_manager: Option<Arc<crate::mcp::McpConnectionManager>>,
     /// Cron scheduler for job listing and cancellation.
     pub cron_scheduler: Option<Arc<tokio::sync::Mutex<Option<crate::cron::CronScheduler>>>>,
+    /// Task log store for per-task activity tracking.
+    pub task_log: Option<Arc<crate::task_log::TaskLogStore>>,
     /// Tool registry for listing all registered tools by source.
     pub tool_registry: Option<Arc<crate::tool_registry::ToolRegistry>>,
     /// Plugin manager for listing loaded plugins.
@@ -180,6 +182,7 @@ impl ControlPanelState {
             awp_state: None,
             mcp_manager: None,
             cron_scheduler: None,
+            task_log: None,
             tool_registry: None,
             plugin_manager: None,
             session_bridge: None,
@@ -233,6 +236,11 @@ impl ControlPanelState {
         cron_scheduler: Arc<tokio::sync::Mutex<Option<crate::cron::CronScheduler>>>,
     ) -> Self {
         self.cron_scheduler = Some(cron_scheduler);
+        self
+    }
+
+    pub fn with_task_log(mut self, task_log: Arc<crate::task_log::TaskLogStore>) -> Self {
+        self.task_log = Some(task_log);
         self
     }
 
@@ -511,6 +519,10 @@ pub fn build_routes(state: Arc<ControlPanelState>) -> axum::Router<Arc<ControlPa
         .route(
             "/ui/api/scheduled-tasks/{id}/resume",
             axum::routing::post(api::scheduled_task_resume),
+        )
+        .route(
+            "/ui/api/scheduled-tasks/{id}/logs",
+            axum::routing::get(api::scheduled_task_logs),
         )
         .route(
             "/ui/api/scheduled-tasks/{id}",

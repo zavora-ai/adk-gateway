@@ -119,6 +119,7 @@ export const api = {
   cancelScheduledTask: (id: string) => request<void>(`/scheduled-tasks/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   resumeScheduledTask: (id: string) => request<void>(`/scheduled-tasks/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   deleteScheduledTask: (id: string) => request<void>(`/scheduled-tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  scheduledTaskLogs: (id: string) => request<{ task_id: string; logs: Array<{ id: number; task_id: string; timestamp: string; event_type: string; message: string }>; count: number }>(`/scheduled-tasks/${encodeURIComponent(id)}/logs`),
   tools: () => request<{ tools: import('../types').ToolInfo[]; total: number }>('/integrations/tools'),
 
   // Delegation

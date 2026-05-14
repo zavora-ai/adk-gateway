@@ -21,6 +21,7 @@ mod delivery;
 mod event_stream;
 mod executable_tools;
 mod fallback_chain;
+mod task_log;
 mod gateway;
 mod gateway_routes;
 mod gateway_state;

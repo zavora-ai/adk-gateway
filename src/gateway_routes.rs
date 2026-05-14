@@ -755,6 +755,7 @@ mod tests {
             agent_instruction: Arc::new(String::new()),
             active_requests: Arc::new(DashMap::new()),
             progress_messages: Arc::new(DashMap::new()),
+            task_log: Arc::new(crate::task_log::TaskLogStore::open(std::path::Path::new(":memory:")).unwrap()),
         })
     }
 

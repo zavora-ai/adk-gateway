@@ -73,6 +73,8 @@ pub struct GatewayState {
     pub memory_summaries: Arc<DashMap<String, String>>,
     /// Shared cron scheduler — populated in `gateway::run()` after the inbound channel is created.
     pub cron_scheduler: Arc<tokio::sync::Mutex<Option<CronScheduler>>>,
+    /// Per-task activity log store.
+    pub task_log: Arc<crate::task_log::TaskLogStore>,
     /// Multi-agent isolation: agent registry with disk persistence.
     pub agent_registry: Arc<AgentRegistry>,
     /// Multi-agent isolation: child process lifecycle manager.
@@ -531,6 +533,14 @@ pub async fn build(
     }));
     let cron_scheduler = Arc::new(tokio::sync::Mutex::new(None));
 
+    // Task log store for per-task activity tracking
+    let task_log_path = config_path.parent().unwrap_or(std::path::Path::new(".")).join("task_logs.db");
+    let task_log = Arc::new(crate::task_log::TaskLogStore::open(&task_log_path).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "failed to open task log DB, using in-memory fallback");
+        crate::task_log::TaskLogStore::open(std::path::Path::new(":memory:")).unwrap()
+    }));
+    tracing::info!(path = %task_log_path.display(), "task log store initialized");
+
     // Finalize control panel with AWP state and other subsystem references
     let mut control_panel_builder = control_panel_builder
         .with_mcp_manager(mcp_manager.clone())
@@ -542,7 +552,8 @@ pub async fn build(
             config.gateway.bind.to_addr(),
             config.gateway.port
         ))
-        .with_cron_scheduler(cron_scheduler.clone());
+        .with_cron_scheduler(cron_scheduler.clone())
+        .with_task_log(task_log.clone());
     if let Some(ref awp) = awp_state {
         control_panel_builder = control_panel_builder.with_awp_state(awp.clone());
     }
@@ -647,6 +658,7 @@ pub async fn build(
         config_path,
         memory_summaries: Arc::new(DashMap::new()),
         cron_scheduler,
+        task_log,
         agent_registry,
         process_manager,
         agent_codegen,

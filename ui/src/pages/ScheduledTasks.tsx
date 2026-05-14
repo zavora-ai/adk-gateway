@@ -32,6 +32,9 @@ export default function ScheduledTasks() {
   const [editingTask, setEditingTask] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [viewingLogs, setViewingLogs] = useState<string | null>(null);
+  const [taskLogs, setTaskLogs] = useState<Array<{ id: number; task_id: string; timestamp: string; event_type: string; message: string }>>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
 
   // Create/Edit form state
   const [formId, setFormId] = useState('');
@@ -131,6 +134,25 @@ export default function ScheduledTasks() {
     }
   };
 
+  const viewLogs = async (id: string) => {
+    if (viewingLogs === id) {
+      setViewingLogs(null);
+      return;
+    }
+    setViewingLogs(id);
+    setLogsLoading(true);
+    try {
+      const res = await api.scheduledTaskLogs(id);
+      if (res.ok && res.data) {
+        setTaskLogs(res.data.logs);
+      }
+    } catch {
+      setTaskLogs([]);
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
   const handleDelete = async (id: string) => {
     try {
       const res = await api.deleteScheduledTask(id);
@@ -226,6 +248,12 @@ export default function ScheduledTasks() {
                       Edit
                     </button>
                     <button
+                      onClick={() => viewLogs(job.id)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg ${viewingLogs === job.id ? 'text-indigo-700 bg-indigo-100' : 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100'}`}
+                    >
+                      Logs
+                    </button>
+                    <button
                       onClick={() => setConfirmDelete(job.id)}
                       className="px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 rounded-lg hover:bg-red-100"
                     >
@@ -233,6 +261,36 @@ export default function ScheduledTasks() {
                     </button>
                   </div>
                 </div>
+
+                {/* Logs Panel */}
+                {viewingLogs === job.id && (
+                  <div className="mt-3 pt-3 border-t border-gray-100">
+                    {logsLoading ? (
+                      <div className="text-xs text-gray-400 py-2">Loading logs...</div>
+                    ) : taskLogs.length === 0 ? (
+                      <div className="text-xs text-gray-400 py-2">No activity recorded yet.</div>
+                    ) : (
+                      <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                        {taskLogs.map((log) => (
+                          <div key={log.id} className="flex items-start gap-2 text-xs">
+                            <span className={`shrink-0 px-1.5 py-0.5 rounded font-medium ${
+                              log.event_type === 'fired' ? 'bg-blue-100 text-blue-700' :
+                              log.event_type === 'delivered' ? 'bg-green-100 text-green-700' :
+                              log.event_type === 'skipped' ? 'bg-yellow-100 text-yellow-700' :
+                              log.event_type === 'failed' ? 'bg-red-100 text-red-700' :
+                              log.event_type === 'response' ? 'bg-purple-100 text-purple-700' :
+                              'bg-gray-100 text-gray-600'
+                            }`}>
+                              {log.event_type}
+                            </span>
+                            <span className="text-gray-400 shrink-0">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                            <span className="text-gray-600 truncate">{log.message}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}

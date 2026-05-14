@@ -858,6 +858,26 @@ pub async fn scheduled_task_delete(
     }))
 }
 
+/// GET /ui/api/scheduled-tasks/:id/logs — Get activity logs for a scheduled task.
+pub async fn scheduled_task_logs(
+    State(state): State<Arc<ControlPanelState>>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    let logs = match &state.task_log {
+        Some(store) => store.get_logs(&task_id, 50),
+        None => vec![],
+    };
+
+    Json(serde_json::json!({
+        "ok": true,
+        "data": {
+            "task_id": task_id,
+            "logs": logs,
+            "count": logs.len(),
+        }
+    }))
+}
+
 /// GET /ui/api/integrations/tools — registered tools from tool_registry.
 pub async fn integrations_tools(
     State(state): State<Arc<ControlPanelState>>,

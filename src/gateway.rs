@@ -941,6 +941,9 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
                 channel = %msg.channel_type,
                 "cron job skipped — no paired users on target channel"
             );
+            if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
+                state.task_log.log(job_id, crate::task_log::EVENT_SKIPPED, "No paired users on target channel");
+            }
             return Ok(());
         }
 
@@ -958,8 +961,16 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
                     user = %paired_on_channel[0].user_id,
                     "cron job skipped — paired user would not pass access control"
                 );
+                if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
+                    state.task_log.log(job_id, crate::task_log::EVENT_SKIPPED, "Paired user would not pass access control");
+                }
                 return Ok(());
             }
+        }
+
+        // Log that the cron job is being processed
+        if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
+            state.task_log.log(job_id, crate::task_log::EVENT_FIRED, &format!("Processing: {}", msg.text));
         }
     }
 
@@ -2010,6 +2021,12 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
         for chunk in &chunks {
             strategy.on_complete(chunk, &msg_ref).await?;
         }
+        // Log successful delivery for cron tasks
+        if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
+            let preview = if response.len() > 100 { &response[..100] } else { &response };
+            state.task_log.log(job_id, crate::task_log::EVENT_DELIVERED, &format!("Delivered: {}", preview));
+            state.task_log.log(job_id, crate::task_log::EVENT_RESPONSE, &response);
+        }
     } else {
         tracing::warn!(
             channel = %msg.channel_type,
@@ -2017,6 +2034,10 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
             sender_id = %msg.sender_id,
             "no delivery channel found — response not delivered (channel not in channel_map)"
         );
+        // Log delivery failure for cron tasks
+        if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
+            state.task_log.log(job_id, crate::task_log::EVENT_FAILED, "No delivery channel found");
+        }
     }
 
     Ok(())

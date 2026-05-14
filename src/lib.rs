@@ -21,6 +21,7 @@ pub mod session_bridge;
 pub mod shutdown;
 pub mod skill_loader;
 pub mod tool_registry;
+pub mod task_log;
 pub mod webhook;
 
 pub mod rbac_bridge;
