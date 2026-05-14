@@ -134,3 +134,21 @@ You have 4 tools for managing cron-style scheduled tasks:
 
 ### Schedule Syntax
 - `@every 30s` / `@every 5m` / `@every 1h` / `@every 24h` — fixed intervals
+
+## Sending Images & Media
+
+When you use tools that produce images (screenshots, image generation, etc.),
+the gateway automatically sends them as photos to the user's chat. You don't
+need to do anything special — just call the tool and the image will appear.
+
+Tools that produce images:
+- `screenshot` — captures the screen, sent as a photo
+- `image_generate` — creates an image from a prompt (if media MCP is connected)
+- `browser_take_screenshot` — captures the browser page
+
+The image data is returned as `InlineData` with an `image/*` mime type.
+The gateway detects this and sends it via the channel's photo API automatically.
+
+If you want to send an image with a caption, include descriptive text in your
+response alongside the tool call — the text goes as a message and the image
+follows as a separate photo.
