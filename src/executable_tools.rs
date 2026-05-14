@@ -1637,7 +1637,7 @@ fn send_photo_tool(
                 let caption = args.get("caption").and_then(|v| v.as_str()).map(|s| s.to_string());
 
                 // Get image data from either path or base64
-                let (data, mime_type) = if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+                let (mut data, mime_type) = if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
                     let path = std::path::Path::new(path_str);
                     let bytes = std::fs::read(path).map_err(|e| {
                         adk_core::AdkError::tool(format!("Cannot read file '{}': {e}", path_str))
@@ -1660,6 +1660,32 @@ fn send_photo_tool(
                         "Either 'path' (file path) or 'base64' (base64 data) is required".to_string()
                     ));
                 };
+
+                // Validate: Telegram rejects photos > 10MB
+                const MAX_PHOTO_SIZE: usize = 10 * 1024 * 1024;
+                if data.len() > MAX_PHOTO_SIZE {
+                    return Err(adk_core::AdkError::tool(
+                        format!("Image too large ({} bytes). Telegram limit is 10MB.", data.len())
+                    ));
+                }
+
+                // Validate: check for valid image magic bytes
+                let is_valid_image = data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) // PNG
+                    || data.starts_with(&[0xFF, 0xD8, 0xFF]) // JPEG
+                    || data.starts_with(b"GIF8") // GIF
+                    || data.starts_with(b"RIFF"); // WebP
+
+                if !is_valid_image {
+                    // Try to send as document instead if it's not a recognized image format
+                    return Err(adk_core::AdkError::tool(
+                        "File does not appear to be a valid image (PNG/JPEG/GIF/WebP). Check the file format.".to_string()
+                    ));
+                }
+
+                // If JPEG and > 5MB, it might fail — truncate quality note
+                if data.len() > 5 * 1024 * 1024 && mime_type == "image/jpeg" {
+                    tracing::warn!(size = data.len(), "large JPEG may fail Telegram processing");
+                }
 
                 // Extract the numeric chat ID from user_id (format: "telegram:12345")
                 let chat_id = user_id.split(':').last().unwrap_or(&user_id).to_string();
