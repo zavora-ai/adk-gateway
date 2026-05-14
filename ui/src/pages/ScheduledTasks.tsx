@@ -88,10 +88,24 @@ export default function ScheduledTasks() {
     try {
       const res = await api.cancelScheduledTask(id);
       if (res.ok) {
-        setAlert({ type: 'success', message: `Task '${id}' cancelled.` });
+        setAlert({ type: 'success', message: `Task '${id}' paused.` });
         refetch();
       } else {
-        setAlert({ type: 'error', message: res.message || 'Failed to cancel.' });
+        setAlert({ type: 'error', message: res.message || 'Failed to pause.' });
+      }
+    } catch {
+      setAlert({ type: 'error', message: 'Network error.' });
+    }
+  };
+
+  const handleResume = async (id: string) => {
+    try {
+      const res = await api.resumeScheduledTask(id);
+      if (res.ok) {
+        setAlert({ type: 'success', message: `Task '${id}' resumed.` });
+        refetch();
+      } else {
+        setAlert({ type: 'error', message: res.message || 'Failed to resume.' });
       }
     } catch {
       setAlert({ type: 'error', message: 'Network error.' });
@@ -176,6 +190,14 @@ export default function ScheduledTasks() {
                         className="px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 rounded-lg hover:bg-amber-100"
                       >
                         Pause
+                      </button>
+                    )}
+                    {job.status === 'Cancelled' && (
+                      <button
+                        onClick={() => handleResume(job.id)}
+                        className="px-3 py-1.5 text-xs font-medium text-green-700 bg-green-50 rounded-lg hover:bg-green-100"
+                      >
+                        Resume
                       </button>
                     )}
                     <button

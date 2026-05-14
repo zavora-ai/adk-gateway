@@ -509,6 +509,10 @@ pub fn build_routes(state: Arc<ControlPanelState>) -> axum::Router<Arc<ControlPa
             axum::routing::post(api::scheduled_task_cancel),
         )
         .route(
+            "/ui/api/scheduled-tasks/{id}/resume",
+            axum::routing::post(api::scheduled_task_resume),
+        )
+        .route(
             "/ui/api/scheduled-tasks/{id}",
             axum::routing::delete(api::scheduled_task_delete),
         )

@@ -117,6 +117,7 @@ export const api = {
   createScheduledTask: (task: { id: string; schedule: string; message: string; delivery?: { channel: string; target: string } }) =>
     request<void>('/scheduled-tasks', { method: 'POST', body: JSON.stringify(task) }),
   cancelScheduledTask: (id: string) => request<void>(`/scheduled-tasks/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  resumeScheduledTask: (id: string) => request<void>(`/scheduled-tasks/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   deleteScheduledTask: (id: string) => request<void>(`/scheduled-tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   tools: () => request<{ tools: import('../types').ToolInfo[]; total: number }>('/integrations/tools'),
 

@@ -110,10 +110,20 @@ impl SkillLoader {
     /// Files missing either field are logged as errors and skipped.
     pub fn load_skills(dir: &Path) -> Vec<SkillDocument> {
         let mut docs = Vec::new();
+
+        // Auto-create the skills directory if it doesn't exist
+        if !dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                tracing::debug!(dir = %dir.display(), error = %e, "could not create skills directory");
+            } else {
+                tracing::info!(dir = %dir.display(), "created skills directory");
+            }
+        }
+
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(e) => {
-                tracing::debug!(dir = %dir.display(), error = %e, "skills directory not found (optional)");
+                tracing::debug!(dir = %dir.display(), error = %e, "skills directory not readable");
                 return docs;
             }
         };

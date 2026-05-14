@@ -760,6 +760,43 @@ pub async fn scheduled_task_cancel(
     }))
 }
 
+/// POST /ui/api/scheduled-tasks/:id/resume — Resume a cancelled scheduled task.
+pub async fn scheduled_task_resume(
+    State(state): State<Arc<ControlPanelState>>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    // Find the job in config and re-schedule it
+    let config = state.config.load();
+    let job = config.cron.jobs.iter().find(|j| j.id == task_id);
+
+    match job {
+        Some(job) => {
+            if let Some(scheduler) = &state.cron_scheduler {
+                let mut guard = scheduler.lock().await;
+                if let Some(sched) = guard.as_mut() {
+                    if let Err(e) = sched.schedule(job.clone()) {
+                        return Json(serde_json::json!({
+                            "ok": false,
+                            "message": format!("Failed to resume: {e}")
+                        }));
+                    }
+                }
+            }
+            tracing::info!(job_id = %task_id, "scheduled task resumed via API");
+            Json(serde_json::json!({
+                "ok": true,
+                "message": format!("Scheduled task '{}' resumed.", task_id)
+            }))
+        }
+        None => {
+            Json(serde_json::json!({
+                "ok": false,
+                "message": format!("Task '{}' not found in config.", task_id)
+            }))
+        }
+    }
+}
+
 /// DELETE /ui/api/scheduled-tasks/:id — Remove a scheduled task from config.
 pub async fn scheduled_task_delete(
     State(state): State<Arc<ControlPanelState>>,
