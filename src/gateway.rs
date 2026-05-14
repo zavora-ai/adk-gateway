@@ -270,7 +270,12 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
         rebuilt_builder = rebuilt_builder.after_model_callback(Box::new(
             |_ctx, resp| {
                 Box::pin(async move {
+                    // Only log when the response has actual content (final response, not intermediate chunks)
                     if let Some(ref content) = resp.content {
+                        if content.parts.is_empty() {
+                            return Ok(Some(resp));
+                        }
+
                         let tool_names: Vec<&str> = content.parts.iter().filter_map(|p| {
                             if let adk_core::Part::FunctionCall { name, .. } = p {
                                 Some(name.as_str())
@@ -284,14 +289,15 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
                                 "LLM response contains tool calls"
                             );
                         }
-                    }
-                    if let Some(ref usage) = resp.usage_metadata {
-                        tracing::info!(
-                            input_tokens = usage.prompt_token_count,
-                            output_tokens = usage.candidates_token_count,
-                            total_tokens = usage.total_token_count,
-                            "LLM token usage"
-                        );
+
+                        if let Some(ref usage) = resp.usage_metadata {
+                            tracing::info!(
+                                input_tokens = usage.prompt_token_count,
+                                output_tokens = usage.candidates_token_count,
+                                total_tokens = usage.total_token_count,
+                                "LLM response complete"
+                            );
+                        }
                     }
                     Ok(Some(resp))
                 })

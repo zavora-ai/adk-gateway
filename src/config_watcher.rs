@@ -202,11 +202,36 @@ impl ConfigWatcher {
     ) -> anyhow::Result<(Self, mpsc::Receiver<GatewayConfig>)> {
         let (tx, rx) = mpsc::channel::<GatewayConfig>(4);
         let path_clone = config_path.clone();
+        let config_filename = config_path
+            .file_name()
+            .map(|f| f.to_os_string())
+            .unwrap_or_default();
+
+        // Debounce: track last reload time to avoid rapid-fire reloads
+        let last_reload = std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(10));
 
         let mut watcher =
             notify::recommended_watcher(move |res: Result<Event, notify::Error>| match res {
                 Ok(event) => {
                     if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                        // Only react to changes to the actual config file
+                        let is_config_file = event.paths.iter().any(|p| {
+                            p.file_name().map(|f| f == config_filename).unwrap_or(false)
+                        });
+                        if !is_config_file {
+                            return;
+                        }
+
+                        // Debounce: skip if last reload was less than 2 seconds ago
+                        {
+                            let mut last = last_reload.lock().unwrap();
+                            if last.elapsed() < std::time::Duration::from_secs(2) {
+                                tracing::debug!("config change debounced, skipping");
+                                return;
+                            }
+                            *last = std::time::Instant::now();
+                        }
+
                         tracing::debug!("config file change detected");
                         match config::load_config(&path_clone) {
                             Ok(new_config) => match validate_config(&new_config) {
