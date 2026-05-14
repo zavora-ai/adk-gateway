@@ -141,10 +141,18 @@ fn kg_search_nodes(kg: Arc<KnowledgeGraph>) -> FunctionTool {
                     })
                 }).collect();
 
-                Ok(serde_json::json!({
-                    "results": entries,
-                    "count": entries.len()
-                }))
+                if entries.is_empty() {
+                    Ok(serde_json::json!({
+                        "results": [],
+                        "count": 0,
+                        "message": format!("No entities matching '{}' found in the knowledge graph.", query)
+                    }))
+                } else {
+                    Ok(serde_json::json!({
+                        "results": entries,
+                        "count": entries.len()
+                    }))
+                }
             }
         },
     )
@@ -189,12 +197,22 @@ fn kg_read_graph(kg: Arc<KnowledgeGraph>) -> FunctionTool {
                     })
                 }).collect();
 
-                Ok(serde_json::json!({
-                    "entities": entity_values,
-                    "relations": relation_values,
-                    "entity_count": entity_values.len(),
-                    "relation_count": relation_values.len()
-                }))
+                if entity_values.is_empty() && relation_values.is_empty() {
+                    Ok(serde_json::json!({
+                        "entities": [],
+                        "relations": [],
+                        "entity_count": 0,
+                        "relation_count": 0,
+                        "message": "Knowledge graph is empty for this user. No entities or relations stored yet."
+                    }))
+                } else {
+                    Ok(serde_json::json!({
+                        "entities": entity_values,
+                        "relations": relation_values,
+                        "entity_count": entity_values.len(),
+                        "relation_count": relation_values.len()
+                    }))
+                }
             }
         },
     )
@@ -1575,12 +1593,21 @@ fn fs_search_tool(root: PathBuf) -> FunctionTool {
                     }
                 }
 
-                Ok(serde_json::json!({
-                    "query": query,
-                    "matches": matches,
-                    "count": matches.len(),
-                    "truncated": matches.len() >= max_results
-                }))
+                if matches.is_empty() {
+                    Ok(serde_json::json!({
+                        "query": query,
+                        "matches": [],
+                        "count": 0,
+                        "message": format!("No files matching '{}' found in '{}'. The search is complete — do not retry with the same query.", query, canonical.to_string_lossy())
+                    }))
+                } else {
+                    Ok(serde_json::json!({
+                        "query": query,
+                        "matches": matches,
+                        "count": matches.len(),
+                        "truncated": matches.len() >= max_results
+                    }))
+                }
             }
         },
     )
