@@ -112,9 +112,9 @@ impl CronScheduler {
         let new_ids: HashSet<&str> = new_jobs.iter().map(|j| j.id.as_str()).collect();
         let current_ids: Vec<String> = self.jobs.keys().cloned().collect();
 
-        // Cancel removed jobs
+        // Cancel removed jobs (but never remove system jobs like heartbeat)
         for id in &current_ids {
-            if !new_ids.contains(id.as_str()) {
+            if !new_ids.contains(id.as_str()) && id != "heartbeat" {
                 self.cancel(id);
                 self.jobs.remove(id);
             }
