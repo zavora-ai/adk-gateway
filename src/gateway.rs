@@ -864,7 +864,9 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     let agent_id = router_guard.resolve_agent(&msg);
     tracing::info!(channel = %msg.channel_type, sender = %msg.sender_id, agent = agent_id, session = %session_id, "processing");
 
-    // Send typing indicator to show the bot is working
+    // Send typing indicator to show the bot is working.
+    // Spawn a background task that re-sends typing every 4 seconds until dropped.
+    let typing_cancel = tokio_util::sync::CancellationToken::new();
     {
         let key = crate::channel::ChannelKey {
             channel_type: msg.channel_type,
@@ -872,11 +874,26 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
         };
         if let Some(ch) = state.channel_map.get(&key) {
             let chat_id = if msg.is_group {
-                msg.group_id.as_deref().unwrap_or(&msg.sender_id)
+                msg.group_id.clone().unwrap_or_else(|| msg.sender_id.clone())
             } else {
-                &msg.sender_id
+                msg.sender_id.clone()
             };
-            let _ = ch.send_typing(chat_id).await;
+            // Send initial typing
+            let _ = ch.send_typing(&chat_id).await;
+
+            // Spawn a loop that keeps typing alive every 4s
+            let channel = ch.value().clone();
+            let cancel = typing_cancel.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = cancel.cancelled() => break,
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(4)) => {
+                            let _ = channel.send_typing(&chat_id).await;
+                        }
+                    }
+                }
+            });
         }
     }
 
@@ -1645,6 +1662,9 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     let latency = start.elapsed();
     let tool_call_count = collected.tool_calls.len();
     let stream_duration = collected.duration;
+
+    // Stop the typing indicator — response is ready
+    typing_cancel.cancel();
 
     tracing::info!(
         channel = %channel_name,
