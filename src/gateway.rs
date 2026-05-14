@@ -1838,6 +1838,13 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
         for chunk in &chunks {
             strategy.on_complete(chunk, &msg_ref).await?;
         }
+    } else {
+        tracing::warn!(
+            channel = %msg.channel_type,
+            account_id = %msg.account_id,
+            sender_id = %msg.sender_id,
+            "no delivery channel found — response not delivered (channel not in channel_map)"
+        );
     }
 
     Ok(())

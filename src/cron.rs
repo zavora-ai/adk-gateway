@@ -222,10 +222,22 @@ impl CronScheduler {
             serde_json::Value::String(kind_label.to_string()),
         );
 
+        // For delivery, the sender_id must be the target chat ID so the
+        // response gets routed back to the correct recipient.
+        let recipient_id = job
+            .deliver_to
+            .as_ref()
+            .map(|d| d.target.clone())
+            .unwrap_or_default();
+
         InboundMessage {
             channel_type,
-            account_id: String::new(),
-            sender_id: format!("cron:{}", job.id),
+            account_id: "default".to_string(),
+            sender_id: if recipient_id.is_empty() {
+                format!("cron:{}", job.id)
+            } else {
+                recipient_id
+            },
             sender_name: Some(format!("cron:{}", job.id)),
             text,
             is_group: false,
