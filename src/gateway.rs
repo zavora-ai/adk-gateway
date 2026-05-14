@@ -846,7 +846,7 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
 
 // ── Message processing ─────────────────────────────────────────────
 
-async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::Result<()> {
+async fn process_message(mut msg: InboundMessage, state: &GatewayState) -> anyhow::Result<()> {
     let start = Instant::now();
     let channel_name = msg.channel_type.to_string();
 
@@ -971,6 +971,21 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
         // Log that the cron job is being processed
         if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
             state.task_log.log(job_id, crate::task_log::EVENT_FIRED, &format!("Processing: {}", msg.text));
+        }
+
+        // For heartbeat: inject into the user's session (shared context)
+        // by replacing sender_id with the paired user's ID.
+        // This gives the heartbeat access to conversation history and KG context.
+        if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
+            if job_id == "heartbeat" {
+                let paired_user_id = paired_on_channel[0].user_id.clone();
+                tracing::info!(
+                    job_id = %job_id,
+                    user_id = %paired_user_id,
+                    "heartbeat: sharing user session for full context"
+                );
+                msg.sender_id = paired_user_id;
+            }
         }
     }
 
