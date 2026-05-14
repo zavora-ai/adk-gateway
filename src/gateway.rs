@@ -2036,8 +2036,8 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
             };
             if let Some(ch) = state.channel_map.get(&img_key) {
                 for img in &collected.images {
-                    if let Err(e) = ch.send_photo(&msg_ref.recipient_id, &img.data, None).await {
-                        tracing::warn!(error = %e, "failed to send image");
+                    if let Err(e) = ch.send_photo(&msg_ref.recipient_id, &img.data, &img.mime_type, None).await {
+                        tracing::warn!(error = %e, mime_type = %img.mime_type, "failed to send image");
                     }
                 }
             }

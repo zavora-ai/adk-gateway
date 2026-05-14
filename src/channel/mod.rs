@@ -219,7 +219,7 @@ pub trait Channel: Send + Sync + 'static {
     }
 
     /// Send a photo/image to a chat. Default is unsupported.
-    async fn send_photo(&self, _chat_id: &str, _data: &[u8], _caption: Option<&str>) -> anyhow::Result<()> {
+    async fn send_photo(&self, _chat_id: &str, _data: &[u8], _mime_type: &str, _caption: Option<&str>) -> anyhow::Result<()> {
         Err(anyhow::anyhow!("photo sending not supported by this channel"))
     }
 

@@ -321,7 +321,7 @@ impl Channel for TelegramChannel {
     }
 
     /// Send a photo to a chat. Used for image responses from tools like screenshot.
-    async fn send_photo(&self, chat_id: &str, data: &[u8], caption: Option<&str>) -> anyhow::Result<()> {
+    async fn send_photo(&self, chat_id: &str, data: &[u8], mime_type: &str, caption: Option<&str>) -> anyhow::Result<()> {
         use teloxide::prelude::*;
         use teloxide::types::{ChatId, InputFile};
 
@@ -329,7 +329,14 @@ impl Channel for TelegramChannel {
         let bot = bot.as_ref().ok_or_else(|| anyhow::anyhow!("telegram bot not initialized"))?;
         let id: i64 = chat_id.parse()?;
 
-        let file = InputFile::memory(data.to_vec()).file_name("image.png");
+        let ext = match mime_type {
+            "image/png" => "png",
+            "image/jpeg" | "image/jpg" => "jpg",
+            "image/gif" => "gif",
+            "image/webp" => "webp",
+            _ => "png",
+        };
+        let file = InputFile::memory(data.to_vec()).file_name(format!("image.{ext}"));
         let mut request = bot.send_photo(ChatId(id), file);
         if let Some(cap) = caption {
             request = request.caption(cap);
