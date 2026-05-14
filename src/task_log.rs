@@ -2,7 +2,7 @@
 //!
 //! Records events for each scheduled task: fired, skipped, delivered, failed, response.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -86,6 +86,7 @@ impl TaskLogStore {
     }
 
     /// Get all logs across all tasks (most recent first).
+    #[allow(dead_code)] // Available for admin diagnostics
     pub fn get_all_logs(&self, limit: usize) -> Vec<TaskLogEntry> {
         let conn = match self.db.lock() {
             Ok(c) => c,
@@ -113,6 +114,7 @@ impl TaskLogStore {
     }
 
     /// Prune old logs (keep only the most recent N per task).
+    #[allow(dead_code)] // Available for periodic maintenance
     pub fn prune(&self, keep_per_task: usize) {
         if let Ok(conn) = self.db.lock() {
             let _ = conn.execute(
