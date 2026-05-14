@@ -927,17 +927,39 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
 
     // For cron messages: verify at least one user is paired on the target channel.
     // If no one is paired, skip processing (don't waste LLM calls with no delivery target).
+    // Also verify the paired user would pass access control (not stale pairing).
     if matches!(msg.source, crate::channel::MessageSource::Cron { .. }) {
         let paired = state.pairing_service.paired_users();
         let channel_str = format!("{}", msg.channel_type);
-        let has_paired_user = paired.iter().any(|u| u.channel_type == channel_str);
-        if !has_paired_user {
-            tracing::warn!(
+        let paired_on_channel: Vec<_> = paired.iter()
+            .filter(|u| u.channel_type == channel_str)
+            .collect();
+
+        if paired_on_channel.is_empty() {
+            tracing::info!(
                 job_id = %msg.sender_id,
                 channel = %msg.channel_type,
                 "cron job skipped — no paired users on target channel"
             );
             return Ok(());
+        }
+
+        // Verify the paired user would pass access control
+        let ac = state.access_control.read().await;
+        let test_msg = crate::channel::InboundMessage {
+            sender_id: paired_on_channel[0].user_id.clone(),
+            ..msg.clone()
+        };
+        match ac.check_message_access(&test_msg) {
+            AuthDecision::Allowed => {} // Good — deliver
+            _ => {
+                tracing::info!(
+                    job_id = %msg.sender_id,
+                    user = %paired_on_channel[0].user_id,
+                    "cron job skipped — paired user would not pass access control"
+                );
+                return Ok(());
+            }
         }
     }
 
