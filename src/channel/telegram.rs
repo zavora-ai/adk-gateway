@@ -308,6 +308,18 @@ impl Channel for TelegramChannel {
         Ok(Some(sent.id.0.to_string()))
     }
 
+    async fn send_typing(&self, chat_id: &str) -> anyhow::Result<()> {
+        use teloxide::prelude::*;
+        use teloxide::types::{ChatAction, ChatId};
+
+        let bot = self.bot.lock().await;
+        if let Some(bot) = bot.as_ref() {
+            let id: i64 = chat_id.parse()?;
+            let _ = bot.send_chat_action(ChatId(id), ChatAction::Typing).await;
+        }
+        Ok(())
+    }
+
     async fn edit(&self, msg: EditMessage) -> anyhow::Result<()> {
         use teloxide::prelude::*;
         use teloxide::types::{ChatId, MessageId};

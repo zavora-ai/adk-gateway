@@ -212,6 +212,12 @@ pub trait Channel: Send + Sync + 'static {
         Err(anyhow::anyhow!("editing not supported by this channel"))
     }
 
+    /// Send a "typing" indicator to show the bot is processing.
+    /// Default implementation is a no-op for channels that don't support it.
+    async fn send_typing(&self, _chat_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Whether this channel supports in-place message editing.
     fn supports_editing(&self) -> bool {
         false

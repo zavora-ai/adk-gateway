@@ -864,6 +864,22 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     let agent_id = router_guard.resolve_agent(&msg);
     tracing::info!(channel = %msg.channel_type, sender = %msg.sender_id, agent = agent_id, session = %session_id, "processing");
 
+    // Send typing indicator to show the bot is working
+    {
+        let key = crate::channel::ChannelKey {
+            channel_type: msg.channel_type,
+            account_id: msg.account_id.clone(),
+        };
+        if let Some(ch) = state.channel_map.get(&key) {
+            let chat_id = if msg.is_group {
+                msg.group_id.as_deref().unwrap_or(&msg.sender_id)
+            } else {
+                &msg.sender_id
+            };
+            let _ = ch.send_typing(chat_id).await;
+        }
+    }
+
     // Log to control panel
     state.control_panel.push_log(LogEntry {
         timestamp: chrono::Utc::now().to_rfc3339(),
