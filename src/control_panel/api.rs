@@ -594,6 +594,14 @@ pub async fn integrations_cron(
             match guard.as_ref() {
                 Some(sched) => {
                     sched.list_all_jobs().iter().map(|(job, status)| {
+                        // Get last error/skip from task log
+                        let last_error = state.task_log.as_ref().and_then(|log| {
+                            let logs = log.get_logs(&job.id, 5);
+                            logs.iter()
+                                .find(|l| l.event_type == "skipped" || l.event_type == "failed")
+                                .map(|l| l.message.clone())
+                        });
+
                         serde_json::json!({
                             "id": job.id,
                             "schedule": job.schedule,
@@ -606,6 +614,7 @@ pub async fn integrations_cron(
                                 crate::cron::CronJobStatus::Active => "Active",
                                 crate::cron::CronJobStatus::Cancelled => "Cancelled",
                             },
+                            "last_error": last_error,
                         })
                     }).collect()
                 }

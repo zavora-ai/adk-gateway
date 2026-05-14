@@ -223,6 +223,11 @@ export default function ScheduledTasks() {
                         </span>
                       )}
                     </div>
+                    {job.last_error && (
+                      <div className="mt-2 px-2.5 py-1.5 bg-red-50 border border-red-100 rounded-lg text-xs text-red-700 flex items-center gap-1.5">
+                        <span>⚠️</span> {job.last_error}
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-4">
                     {job.status === 'Active' && (
