@@ -972,21 +972,6 @@ async fn process_message(mut msg: InboundMessage, state: &GatewayState) -> anyho
         if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
             state.task_log.log(job_id, crate::task_log::EVENT_FIRED, &format!("Processing: {}", msg.text));
         }
-
-        // For heartbeat: inject into the user's session (shared context)
-        // by replacing sender_id with the paired user's ID.
-        // This gives the heartbeat access to conversation history and KG context.
-        if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
-            if job_id == "heartbeat" {
-                let paired_user_id = paired_on_channel[0].user_id.clone();
-                tracing::info!(
-                    job_id = %job_id,
-                    user_id = %paired_user_id,
-                    "heartbeat: sharing user session for full context"
-                );
-                msg.sender_id = paired_user_id;
-            }
-        }
     }
 
     // ── Plugin: OnUserMessage hook (R8) — fired when message first arrives ──
@@ -2030,6 +2015,19 @@ async fn process_message(mut msg: InboundMessage, state: &GatewayState) -> anyho
     let _ = state.audit_sink.log_event(audit_event).await;
 
     // Deliver final response via on_complete, splitting if needed (R17.2, R19.3)
+    // Suppress HEARTBEAT_OK responses — don't deliver to user
+    let is_heartbeat_ok = response.trim() == "HEARTBEAT_OK"
+        || response.trim().starts_with("HEARTBEAT_OK")
+        || response.trim().ends_with("HEARTBEAT_OK");
+
+    if is_heartbeat_ok {
+        if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
+            tracing::info!(job_id = %job_id, "heartbeat OK — nothing to report, suppressing delivery");
+            state.task_log.log(job_id, crate::task_log::EVENT_DELIVERED, "HEARTBEAT_OK (suppressed)");
+        }
+        return Ok(());
+    }
+
     if let Some((strategy, msg_ref)) = delivery_strategy {
         let max_len = msg_ref.channel_type.max_message_length();
         let chunks = split_message(&response, max_len);
