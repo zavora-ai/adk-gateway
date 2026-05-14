@@ -695,12 +695,24 @@ pub async fn scheduled_task_create(
 
     let mut cfg = state.config.load().as_ref().clone();
 
-    // Check for duplicate ID
+    // Check for duplicate ID (in config AND in scheduler)
     if cfg.cron.jobs.iter().any(|j| j.id == id) {
         return Json(serde_json::json!({
             "ok": false,
             "message": format!("A scheduled task with ID '{}' already exists.", id)
         }));
+    }
+    // Also check runtime-only tasks (like heartbeat)
+    if let Some(scheduler) = &state.cron_scheduler {
+        let guard = scheduler.lock().await;
+        if let Some(sched) = guard.as_ref() {
+            if sched.is_active(&id) {
+                return Json(serde_json::json!({
+                    "ok": false,
+                    "message": format!("A scheduled task with ID '{}' is already running.", id)
+                }));
+            }
+        }
     }
 
     cfg.cron.jobs.push(new_job.clone());
@@ -745,18 +757,28 @@ pub async fn scheduled_task_cancel(
     State(state): State<Arc<ControlPanelState>>,
     axum::extract::Path(task_id): axum::extract::Path<String>,
 ) -> Json<serde_json::Value> {
+    let mut found = false;
     if let Some(scheduler) = &state.cron_scheduler {
         let mut guard = scheduler.lock().await;
         if let Some(sched) = guard.as_mut() {
-            sched.cancel(&task_id);
+            if sched.is_active(&task_id) {
+                sched.cancel(&task_id);
+                found = true;
+            }
         }
     }
 
-    tracing::info!(job_id = %task_id, "scheduled task cancelled via API");
+    if !found {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Task '{}' not found or already paused.", task_id)
+        }));
+    }
 
+    tracing::info!(job_id = %task_id, "scheduled task cancelled via API");
     Json(serde_json::json!({
         "ok": true,
-        "message": format!("Scheduled task '{}' cancelled.", task_id)
+        "message": format!("Scheduled task '{}' paused.", task_id)
     }))
 }
 
@@ -765,16 +787,41 @@ pub async fn scheduled_task_resume(
     State(state): State<Arc<ControlPanelState>>,
     axum::extract::Path(task_id): axum::extract::Path<String>,
 ) -> Json<serde_json::Value> {
-    // Find the job in config and re-schedule it
+    // Try to find the job definition: config first, then scheduler, then heartbeat default
     let config = state.config.load();
-    let job = config.cron.jobs.iter().find(|j| j.id == task_id);
+    let mut job: Option<crate::config::CronJob> = config.cron.jobs.iter().find(|j| j.id == task_id).cloned();
+
+    // If not in config, check the scheduler's tracked jobs
+    if job.is_none() {
+        if let Some(scheduler) = &state.cron_scheduler {
+            let guard = scheduler.lock().await;
+            if let Some(sched) = guard.as_ref() {
+                job = sched.list_all_jobs().iter()
+                    .find(|(j, _)| j.id == task_id)
+                    .map(|(j, _)| (*j).clone());
+            }
+        }
+    }
+
+    // If still not found and it's the heartbeat, use the default definition
+    if job.is_none() && task_id == "heartbeat" {
+        job = Some(crate::config::CronJob {
+            id: "heartbeat".to_string(),
+            schedule: "@every 30m".to_string(),
+            message: "ask:Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs attention, reply with just HEARTBEAT_OK.".to_string(),
+            deliver_to: Some(crate::config::CronDelivery {
+                channel: "telegram".to_string(),
+                target: "last".to_string(),
+            }),
+        });
+    }
 
     match job {
         Some(job) => {
             if let Some(scheduler) = &state.cron_scheduler {
                 let mut guard = scheduler.lock().await;
                 if let Some(sched) = guard.as_mut() {
-                    if let Err(e) = sched.schedule(job.clone()) {
+                    if let Err(e) = sched.schedule(job) {
                         return Json(serde_json::json!({
                             "ok": false,
                             "message": format!("Failed to resume: {e}")
@@ -791,67 +838,67 @@ pub async fn scheduled_task_resume(
         None => {
             Json(serde_json::json!({
                 "ok": false,
-                "message": format!("Task '{}' not found in config.", task_id)
+                "message": format!("Task '{}' not found.", task_id)
             }))
         }
     }
 }
 
-/// DELETE /ui/api/scheduled-tasks/:id — Remove a scheduled task from config.
+/// DELETE /ui/api/scheduled-tasks/:id — Remove a scheduled task.
+/// For config-persisted tasks: removes from config and scheduler.
+/// For runtime-only tasks (heartbeat): just cancels from scheduler.
 pub async fn scheduled_task_delete(
     State(state): State<Arc<ControlPanelState>>,
     axum::extract::Path(task_id): axum::extract::Path<String>,
 ) -> Json<serde_json::Value> {
-    let config_path = match &state.config_path {
-        Some(p) => p.clone(),
-        None => {
-            return Json(serde_json::json!({
-                "ok": false,
-                "message": "Config file path not configured"
-            }));
+    // Cancel from scheduler first (works for both config and runtime tasks)
+    let mut was_in_scheduler = false;
+    if let Some(scheduler) = &state.cron_scheduler {
+        let mut guard = scheduler.lock().await;
+        if let Some(sched) = guard.as_mut() {
+            // Check if it exists in the scheduler
+            let exists = sched.list_all_jobs().iter().any(|(j, _)| j.id == task_id);
+            if exists {
+                sched.cancel(&task_id);
+                was_in_scheduler = true;
+            }
         }
-    };
+    }
 
-    let mut cfg = state.config.load().as_ref().clone();
-    let before = cfg.cron.jobs.len();
-    cfg.cron.jobs.retain(|j| j.id != task_id);
+    // Try to remove from config (only for persisted tasks)
+    let mut removed_from_config = false;
+    if let Some(config_path) = &state.config_path {
+        let mut cfg = state.config.load().as_ref().clone();
+        let before = cfg.cron.jobs.len();
+        cfg.cron.jobs.retain(|j| j.id != task_id);
 
-    if cfg.cron.jobs.len() == before {
+        if cfg.cron.jobs.len() < before {
+            removed_from_config = true;
+
+            // Write to disk
+            if let Ok(output) = serde_json::to_string_pretty(&cfg) {
+                let _ = std::fs::write(config_path, &output);
+            }
+
+            // Hot-reload
+            state.config.store(std::sync::Arc::new(cfg.clone()));
+            if let Some(scheduler) = &state.cron_scheduler {
+                let mut guard = scheduler.lock().await;
+                if let Some(sched) = guard.as_mut() {
+                    sched.reconcile(&cfg.cron.jobs);
+                }
+            }
+        }
+    }
+
+    if !was_in_scheduler && !removed_from_config {
         return Json(serde_json::json!({
             "ok": false,
             "message": format!("Scheduled task '{}' not found.", task_id)
         }));
     }
 
-    // Write to disk
-    let output = match serde_json::to_string_pretty(&cfg) {
-        Ok(s) => s,
-        Err(e) => {
-            return Json(serde_json::json!({
-                "ok": false,
-                "message": format!("Failed to serialize config: {e}")
-            }));
-        }
-    };
-
-    if let Err(e) = std::fs::write(&config_path, &output) {
-        return Json(serde_json::json!({
-            "ok": false,
-            "message": format!("Failed to write config: {e}")
-        }));
-    }
-
-    // Hot-reload
-    state.config.store(std::sync::Arc::new(cfg.clone()));
-    if let Some(scheduler) = &state.cron_scheduler {
-        let mut guard = scheduler.lock().await;
-        if let Some(sched) = guard.as_mut() {
-            sched.reconcile(&cfg.cron.jobs);
-        }
-    }
-
-    tracing::info!(job_id = %task_id, "scheduled task deleted via API");
-
+    tracing::info!(job_id = %task_id, from_config = removed_from_config, "scheduled task deleted via API");
     Json(serde_json::json!({
         "ok": true,
         "message": format!("Scheduled task '{}' deleted.", task_id)

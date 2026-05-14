@@ -1637,7 +1637,7 @@ fn send_photo_tool(
                 let caption = args.get("caption").and_then(|v| v.as_str()).map(|s| s.to_string());
 
                 // Get image data from either path or base64
-                let (mut data, mime_type) = if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+                let (data, mime_type) = if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
                     let path = std::path::Path::new(path_str);
                     let bytes = std::fs::read(path).map_err(|e| {
                         adk_core::AdkError::tool(format!("Cannot read file '{}': {e}", path_str))
