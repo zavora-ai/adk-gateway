@@ -599,7 +599,10 @@ pub async fn integrations_cron(
                             let logs = log.get_logs(&job.id, 5);
                             logs.iter()
                                 .find(|l| l.event_type == "skipped" || l.event_type == "failed")
-                                .map(|l| l.message.clone())
+                                .map(|l| serde_json::json!({
+                                    "message": l.message,
+                                    "timestamp": l.timestamp,
+                                }))
                         });
 
                         serde_json::json!({

@@ -225,7 +225,9 @@ export default function ScheduledTasks() {
                     </div>
                     {job.last_error && (
                       <div className="mt-2 px-2.5 py-1.5 bg-red-50 border border-red-100 rounded-lg text-xs text-red-700 flex items-center gap-1.5">
-                        <span>⚠️</span> {job.last_error}
+                        <span>⚠️</span>
+                        <span>{job.last_error.message}</span>
+                        <span className="text-red-400 ml-auto shrink-0">{new Date(job.last_error.timestamp).toLocaleString()}</span>
                       </div>
                     )}
                   </div>
