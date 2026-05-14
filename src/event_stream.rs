@@ -37,10 +37,19 @@ pub struct CollectedResponse {
     pub text: String,
     /// Tool calls observed during the stream.
     pub tool_calls: Vec<ToolCallInfo>,
+    /// Images (inline data) from the response — base64 encoded with mime type.
+    pub images: Vec<ImageData>,
     /// Token usage, if reported by the model.
     pub token_count: Option<TokenCount>,
     /// Wall-clock duration of the collection.
     pub duration: Duration,
+}
+
+/// An image returned in the agent's response.
+#[derive(Debug, Clone)]
+pub struct ImageData {
+    pub mime_type: String,
+    pub data: Vec<u8>,
 }
 
 /// Consumes an `EventStream` and produces a `CollectedResponse`.
@@ -106,6 +115,7 @@ impl EventStreamCollector {
         let mut last_partial_text = String::new();
         let mut final_text: Option<String> = None;
         let mut tool_calls: Vec<ToolCallInfo> = Vec::new();
+        let mut images: Vec<ImageData> = Vec::new();
         let mut token_count: Option<TokenCount> = None;
         let mut error_text: Option<String> = None;
 
@@ -118,6 +128,7 @@ impl EventStreamCollector {
                         &mut last_partial_text,
                         &mut final_text,
                         &mut tool_calls,
+                        &mut images,
                         &mut token_count,
                     );
 
@@ -147,6 +158,7 @@ impl EventStreamCollector {
         CollectedResponse {
             text,
             tool_calls,
+            images,
             token_count,
             duration,
         }
@@ -158,6 +170,7 @@ impl EventStreamCollector {
         last_partial_text: &mut String,
         final_text: &mut Option<String>,
         tool_calls: &mut Vec<ToolCallInfo>,
+        images: &mut Vec<ImageData>,
         token_count: &mut Option<TokenCount>,
     ) {
         // Skip user-authored events — we only care about agent output
@@ -204,7 +217,16 @@ impl EventStreamCollector {
                         });
                     }
                     // Skip all other part types (FunctionResponse, Thinking,
-                    // InlineData, FileData, ServerToolCall, ServerToolResponse)
+                    // FileData, ServerToolCall, ServerToolResponse)
+                    // But capture InlineData (images, audio)
+                    Part::InlineData { mime_type, data } => {
+                        if mime_type.starts_with("image/") {
+                            images.push(ImageData {
+                                mime_type: mime_type.clone(),
+                                data: data.clone(),
+                            });
+                        }
+                    }
                     _ => {}
                 }
             }

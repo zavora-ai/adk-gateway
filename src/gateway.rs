@@ -2027,6 +2027,21 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
             state.task_log.log(job_id, crate::task_log::EVENT_DELIVERED, &format!("Delivered: {}", preview));
             state.task_log.log(job_id, crate::task_log::EVENT_RESPONSE, &response);
         }
+
+        // Send any images that were in the response
+        if !collected.images.is_empty() {
+            let img_key = ChannelKey {
+                channel_type: msg.channel_type,
+                account_id: msg.account_id.clone(),
+            };
+            if let Some(ch) = state.channel_map.get(&img_key) {
+                for img in &collected.images {
+                    if let Err(e) = ch.send_photo(&msg_ref.recipient_id, &img.data, None).await {
+                        tracing::warn!(error = %e, "failed to send image");
+                    }
+                }
+            }
+        }
     } else {
         tracing::warn!(
             channel = %msg.channel_type,
