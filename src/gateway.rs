@@ -657,7 +657,7 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
         if !has_heartbeat {
             let heartbeat_job = crate::config::CronJob {
                 id: "heartbeat".to_string(),
-                schedule: "@every 30m".to_string(),
+                schedule: "@every 1h".to_string(),
                 message: "ask:Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs attention, reply with just HEARTBEAT_OK.".to_string(),
                 deliver_to: Some(crate::config::CronDelivery {
                     channel: "telegram".to_string(),

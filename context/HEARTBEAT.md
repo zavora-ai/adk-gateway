@@ -1,6 +1,6 @@
 # Heartbeat Checklist
 
-This runs every 30 minutes. Follow it strictly.
+This runs every hour. Follow it strictly.
 
 ## Check
 - Any pending tasks or follow-ups that need attention?
