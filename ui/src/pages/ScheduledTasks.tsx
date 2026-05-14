@@ -29,10 +29,11 @@ export default function ScheduledTasks() {
   const { data: cronData, refetch } = useApi<{ jobs: CronJobInfo[]; total: number }>(() => api.cronJobs(), []);
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingTask, setEditingTask] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Create form state
+  // Create/Edit form state
   const [formId, setFormId] = useState('');
   const [formSchedule, setFormSchedule] = useState('@every 5m');
   const [formMessage, setFormMessage] = useState('');
@@ -49,6 +50,19 @@ export default function ScheduledTasks() {
     setFormIsAgent(false);
     setFormChannel('');
     setFormTarget('');
+    setEditingTask(null);
+  };
+
+  const openEdit = (job: CronJobInfo) => {
+    const isAgent = job.message.startsWith('ask:');
+    setFormId(job.id);
+    setFormSchedule(job.schedule);
+    setFormMessage(isAgent ? job.message.slice(4).trim() : job.message);
+    setFormIsAgent(isAgent);
+    setFormChannel(job.delivery?.channel || '');
+    setFormTarget(job.delivery?.target || '');
+    setEditingTask(job.id);
+    setShowCreate(true);
   };
 
   const handleCreate = async () => {
@@ -62,6 +76,11 @@ export default function ScheduledTasks() {
       const message = formIsAgent ? `ask:${formMessage}` : formMessage;
       const delivery = formChannel ? { channel: formChannel, target: formTarget } : undefined;
 
+      // If editing, delete the old task first
+      if (editingTask) {
+        await api.deleteScheduledTask(editingTask);
+      }
+
       const res = await api.createScheduledTask({
         id: formId.trim(),
         schedule: formSchedule,
@@ -70,12 +89,12 @@ export default function ScheduledTasks() {
       });
 
       if (res.ok) {
-        setAlert({ type: 'success', message: res.message || 'Task created.' });
+        setAlert({ type: 'success', message: editingTask ? 'Task updated.' : 'Task created.' });
         setShowCreate(false);
         resetForm();
         refetch();
       } else {
-        setAlert({ type: 'error', message: res.message || 'Failed to create task.' });
+        setAlert({ type: 'error', message: res.message || 'Failed to save task.' });
       }
     } catch {
       setAlert({ type: 'error', message: 'Network error.' });
@@ -201,6 +220,12 @@ export default function ScheduledTasks() {
                       </button>
                     )}
                     <button
+                      onClick={() => openEdit(job)}
+                      className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100"
+                    >
+                      Edit
+                    </button>
+                    <button
                       onClick={() => setConfirmDelete(job.id)}
                       className="px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 rounded-lg hover:bg-red-100"
                     >
@@ -232,7 +257,7 @@ export default function ScheduledTasks() {
       {showCreate && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
-            <h3 className="text-lg font-semibold mb-4">New Scheduled Task</h3>
+            <h3 className="text-lg font-semibold mb-4">{editingTask ? 'Edit Scheduled Task' : 'New Scheduled Task'}</h3>
 
             <div className="space-y-4">
               {/* Task ID */}
@@ -243,9 +268,10 @@ export default function ScheduledTasks() {
                   value={formId}
                   onChange={(e) => setFormId(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
                   placeholder="daily-report"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
+                  disabled={!!editingTask}
+                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)] ${editingTask ? 'bg-gray-100 text-gray-500' : ''}`}
                 />
-                <p className="text-xs text-gray-400 mt-1">Letters, numbers, hyphens, underscores only.</p>
+                {!editingTask && <p className="text-xs text-gray-400 mt-1">Letters, numbers, hyphens, underscores only.</p>}
               </div>
 
               {/* Schedule */}
@@ -361,7 +387,7 @@ export default function ScheduledTasks() {
                 disabled={saving || !formId.trim() || !formMessage.trim()}
                 className="px-5 py-2 bg-[var(--color-accent)] text-white rounded-lg text-sm font-medium hover:bg-[var(--color-accent-hover)] disabled:opacity-50"
               >
-                {saving ? 'Creating...' : 'Create Task'}
+                {saving ? 'Saving...' : editingTask ? 'Update Task' : 'Create Task'}
               </button>
             </div>
           </div>

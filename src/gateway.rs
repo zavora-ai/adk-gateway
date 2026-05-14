@@ -651,6 +651,26 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
     // ── Cron scheduler ─────────────────────────────────────────────
     let cron_scheduler = {
         let mut scheduler = CronScheduler::new(inbound_tx.clone());
+
+        // Auto-create system heartbeat job if not already configured
+        let has_heartbeat = config.cron.jobs.iter().any(|j| j.id == "heartbeat");
+        if !has_heartbeat {
+            let heartbeat_job = crate::config::CronJob {
+                id: "heartbeat".to_string(),
+                schedule: "@every 30m".to_string(),
+                message: "ask:Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs attention, reply with just HEARTBEAT_OK.".to_string(),
+                deliver_to: Some(crate::config::CronDelivery {
+                    channel: "telegram".to_string(),
+                    target: "last".to_string(),
+                }),
+            };
+            if let Err(e) = scheduler.schedule(heartbeat_job) {
+                tracing::warn!(error = %e, "failed to schedule system heartbeat");
+            } else {
+                tracing::info!("system heartbeat scheduled (every 30m)");
+            }
+        }
+
         for job in &config.cron.jobs {
             if let Err(e) = scheduler.schedule(job.clone()) {
                 tracing::error!(job_id = %job.id, error = %e, "failed to schedule cron job");
