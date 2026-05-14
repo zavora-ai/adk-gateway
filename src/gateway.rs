@@ -655,10 +655,26 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
         // Auto-create system heartbeat job if not already configured
         let has_heartbeat = config.cron.jobs.iter().any(|j| j.id == "heartbeat");
         if !has_heartbeat {
+            // Load HEARTBEAT.md content to inject into the prompt
+            let heartbeat_content = {
+                let cfg_parent = state.config_path.parent().unwrap_or(std::path::Path::new("."));
+                let project_dir = std::env::current_dir().unwrap_or_default();
+                let candidates = vec![
+                    cfg_parent.join("context/HEARTBEAT.md"),
+                    project_dir.join("context/HEARTBEAT.md"),
+                    cfg_parent.join("HEARTBEAT.md"),
+                ];
+                candidates.iter()
+                    .find_map(|p| std::fs::read_to_string(p).ok())
+                    .unwrap_or_else(|| "Check if anything needs attention. If nothing, reply HEARTBEAT_OK.".to_string())
+            };
+
+            let heartbeat_prompt = format!("ask:{}\n\nIf nothing needs attention, reply with just HEARTBEAT_OK.", heartbeat_content);
+
             let heartbeat_job = crate::config::CronJob {
                 id: "heartbeat".to_string(),
                 schedule: "@every 1h".to_string(),
-                message: "ask:Read HEARTBEAT.md if it exists. Follow it strictly. If nothing needs attention, reply with just HEARTBEAT_OK.".to_string(),
+                message: heartbeat_prompt,
                 deliver_to: Some(crate::config::CronDelivery {
                     channel: "telegram".to_string(),
                     target: "last".to_string(),
@@ -1927,6 +1943,9 @@ async fn process_message(mut msg: InboundMessage, state: &GatewayState) -> anyho
         .invoke_hook(crate::plugin_manager::PluginHook::AfterRun, &mut after_ctx);
 
     // ── Memory: store conversation facts and rebuild entity summary ──
+    // Skip memory storage for cron messages (they shouldn't pollute the KG)
+    let is_cron = matches!(msg.source, crate::channel::MessageSource::Cron { .. });
+    if !is_cron {
     if let Some(ref mem_cfg) = state.config.load().memory {
         let user_entity_name = msg
             .sender_name
@@ -1981,6 +2000,7 @@ async fn process_message(mut msg: InboundMessage, state: &GatewayState) -> anyho
             "memory: stored conversation turn, summary rebuilt"
         );
     }
+    } // end !is_cron
 
     // Audit log
     let tool_names: Vec<&str> = collected
