@@ -82,7 +82,13 @@ impl CronScheduler {
             Self::cron_loop(job_clone, tx, cancel_token).await;
         });
 
-        tracing::info!(job_id = %job.id, schedule = %job.schedule, "cron job scheduled");
+        tracing::info!(
+            job_id = %job.id,
+            schedule = %job.schedule,
+            message = %job.message,
+            delivery = ?job.deliver_to,
+            "cron job scheduled"
+        );
         self.jobs.insert(job.id.clone(), state);
         Ok(())
     }
@@ -91,7 +97,9 @@ impl CronScheduler {
     pub fn cancel(&mut self, job_id: &str) {
         if let Some(state) = self.jobs.get_mut(job_id) {
             Self::cancel_job_state(state);
-            tracing::info!(job_id = %job_id, "cron job cancelled");
+            tracing::info!(job_id = %job_id, "cron job cancelled by user");
+        } else {
+            tracing::warn!(job_id = %job_id, "attempted to cancel unknown cron job");
         }
     }
 
@@ -254,22 +262,41 @@ impl CronScheduler {
         // Here we use a fixed interval fallback for non-standard expressions.
         let interval = Self::parse_schedule_interval(&job.schedule);
 
+        tracing::info!(
+            job_id = %job.id,
+            schedule = %job.schedule,
+            interval_secs = interval.as_secs(),
+            message = %job.message,
+            delivery = ?job.deliver_to,
+            "cron loop started, waiting for first trigger"
+        );
+
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {
-                    tracing::debug!(job_id = %job.id, "cron job cancelled, exiting loop");
+                    tracing::info!(job_id = %job.id, "cron job cancelled, exiting loop");
                     break;
                 }
                 _ = tokio::time::sleep(interval) => {
                     let msg = Self::build_inbound_message(&job);
+                    let message_kind = if job.message.starts_with("ask:") { "agent_prompt" } else { "direct_message" };
+                    tracing::info!(
+                        job_id = %job.id,
+                        schedule = %job.schedule,
+                        message_kind = message_kind,
+                        message_text = %job.message,
+                        delivery_channel = ?job.deliver_to.as_ref().map(|d| d.channel.as_str()),
+                        delivery_target = ?job.deliver_to.as_ref().map(|d| d.target.as_str()),
+                        "cron job firing"
+                    );
                     if let Err(e) = tx.send(msg).await {
                         tracing::error!(
                             job_id = %job.id,
                             error = %e,
-                            "failed to send cron message, will retry on next trigger"
+                            "failed to send cron message to pipeline"
                         );
                     } else {
-                        tracing::info!(job_id = %job.id, "cron job triggered");
+                        tracing::info!(job_id = %job.id, "cron job message sent to pipeline successfully");
                     }
                 }
             }
