@@ -663,6 +663,7 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
                     channel: "telegram".to_string(),
                     target: "last".to_string(),
                 }),
+                suppress_keyword: Some("HEARTBEAT_OK".to_string()),
             };
             if let Err(e) = scheduler.schedule(heartbeat_job) {
                 tracing::warn!(error = %e, "failed to schedule system heartbeat");
@@ -2014,18 +2015,31 @@ async fn process_message(mut msg: InboundMessage, state: &GatewayState) -> anyho
     };
     let _ = state.audit_sink.log_event(audit_event).await;
 
-    // Deliver final response via on_complete, splitting if needed (R17.2, R19.3)
-    // Suppress HEARTBEAT_OK responses — don't deliver to user
-    let is_heartbeat_ok = response.trim() == "HEARTBEAT_OK"
-        || response.trim().starts_with("HEARTBEAT_OK")
-        || response.trim().ends_with("HEARTBEAT_OK");
+    // Suppress delivery if response matches the task's suppress_keyword
+    if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
+        // Look up the suppress_keyword for this task
+        let suppress_keyword = {
+            let config = state.config.load();
+            config.cron.jobs.iter()
+                .find(|j| j.id == *job_id)
+                .and_then(|j| j.suppress_keyword.clone())
+        }.or_else(|| {
+            // For runtime-only tasks (heartbeat), check the scheduler
+            if job_id == "heartbeat" {
+                Some("HEARTBEAT_OK".to_string())
+            } else {
+                None
+            }
+        });
 
-    if is_heartbeat_ok {
-        if let crate::channel::MessageSource::Cron { ref job_id } = msg.source {
-            tracing::info!(job_id = %job_id, "heartbeat OK — nothing to report, suppressing delivery");
-            state.task_log.log(job_id, crate::task_log::EVENT_DELIVERED, "HEARTBEAT_OK (suppressed)");
+        if let Some(keyword) = suppress_keyword {
+            let trimmed = response.trim();
+            if trimmed == keyword || trimmed.starts_with(&keyword) || trimmed.ends_with(&keyword) {
+                tracing::info!(job_id = %job_id, keyword = %keyword, "task response suppressed (matched suppress_keyword)");
+                state.task_log.log(job_id, crate::task_log::EVENT_DELIVERED, &format!("{} (suppressed)", keyword));
+                return Ok(());
+            }
         }
-        return Ok(());
     }
 
     if let Some((strategy, msg_ref)) = delivery_strategy {

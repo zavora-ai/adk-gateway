@@ -618,6 +618,7 @@ pub async fn integrations_cron(
                                 crate::cron::CronJobStatus::Cancelled => "Cancelled",
                             },
                             "last_error": last_error,
+                            "suppress_keyword": job.suppress_keyword,
                         })
                     }).collect()
                 }
@@ -687,11 +688,17 @@ pub async fn scheduled_task_create(
         Some(crate::config::CronDelivery { channel, target })
     });
 
+    let suppress_keyword = payload.get("suppress_keyword")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
     let new_job = crate::config::CronJob {
         id: id.clone(),
         schedule,
         message,
         deliver_to: delivery,
+        suppress_keyword,
     };
 
     // Persist to config
@@ -825,6 +832,7 @@ pub async fn scheduled_task_resume(
                 channel: "telegram".to_string(),
                 target: "last".to_string(),
             }),
+            suppress_keyword: Some("HEARTBEAT_OK".to_string()),
         });
     }
 

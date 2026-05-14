@@ -120,6 +120,7 @@ export interface CronJobInfo {
   delivery: { channel: string; target: string } | null;
   status: string;
   last_error?: { message: string; timestamp: string } | null;
+  suppress_keyword?: string | null;
 }
 
 export interface ToolInfo {

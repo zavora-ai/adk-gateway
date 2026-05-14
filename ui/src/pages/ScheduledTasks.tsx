@@ -43,6 +43,7 @@ export default function ScheduledTasks() {
   const [formIsAgent, setFormIsAgent] = useState(false);
   const [formChannel, setFormChannel] = useState('');
   const [formTarget, setFormTarget] = useState('');
+  const [formSuppressKeyword, setFormSuppressKeyword] = useState('');
 
   const jobs = cronData?.jobs ?? [];
 
@@ -53,6 +54,7 @@ export default function ScheduledTasks() {
     setFormIsAgent(false);
     setFormChannel('');
     setFormTarget('');
+    setFormSuppressKeyword('');
     setEditingTask(null);
   };
 
@@ -64,6 +66,7 @@ export default function ScheduledTasks() {
     setFormIsAgent(isAgent);
     setFormChannel(job.delivery?.channel || '');
     setFormTarget(job.delivery?.target || '');
+    setFormSuppressKeyword(job.suppress_keyword || '');
     setEditingTask(job.id);
     setShowCreate(true);
   };
@@ -89,6 +92,7 @@ export default function ScheduledTasks() {
         schedule: formSchedule,
         message,
         delivery,
+        suppress_keyword: formSuppressKeyword || undefined,
       });
 
       if (res.ok) {
@@ -436,6 +440,19 @@ export default function ScheduledTasks() {
                     />
                   )}
                 </div>
+              </div>
+
+              {/* Suppress Keyword */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Hide Response Keyword (optional)</label>
+                <input
+                  type="text"
+                  value={formSuppressKeyword}
+                  onChange={(e) => setFormSuppressKeyword(e.target.value)}
+                  placeholder="e.g. HEARTBEAT_OK"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
+                />
+                <p className="text-xs text-gray-400 mt-1">If the response contains only this keyword, it won't be sent to the user.</p>
               </div>
             </div>
 

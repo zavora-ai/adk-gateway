@@ -1178,11 +1178,17 @@ fn task_create_tool(
                     Some(crate::config::CronDelivery { channel, target })
                 });
 
+                let suppress_keyword = args.get("suppress_keyword")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+
                 let new_job = crate::config::CronJob {
                     id: id.clone(),
                     schedule: schedule.clone(),
                     message: message.clone(),
                     deliver_to: delivery,
+                    suppress_keyword,
                 };
 
                 // Persist to config

@@ -890,6 +890,10 @@ pub struct CronJob {
     pub message: String,
     #[serde(rename = "deliverTo")]
     pub deliver_to: Option<CronDelivery>,
+    /// If the agent's response contains only this keyword, suppress delivery.
+    /// Used for heartbeat-style tasks where "nothing to report" shouldn't ping the user.
+    #[serde(default, rename = "suppressKeyword", skip_serializing_if = "Option::is_none")]
+    pub suppress_keyword: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

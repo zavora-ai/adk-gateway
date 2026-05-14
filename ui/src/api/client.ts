@@ -114,7 +114,7 @@ export const api = {
   removeMcpServer: (id: string) => request<void>(`/integrations/mcp/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   toggleMcpServer: (id: string) => request<void>(`/integrations/mcp/${encodeURIComponent(id)}/toggle`, { method: 'POST' }),
   cronJobs: () => request<{ jobs: import('../types').CronJobInfo[]; total: number }>('/integrations/cron'),
-  createScheduledTask: (task: { id: string; schedule: string; message: string; delivery?: { channel: string; target: string } }) =>
+  createScheduledTask: (task: { id: string; schedule: string; message: string; delivery?: { channel: string; target: string }; suppress_keyword?: string }) =>
     request<void>('/scheduled-tasks', { method: 'POST', body: JSON.stringify(task) }),
   cancelScheduledTask: (id: string) => request<void>(`/scheduled-tasks/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   resumeScheduledTask: (id: string) => request<void>(`/scheduled-tasks/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
