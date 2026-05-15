@@ -27,6 +27,7 @@ use adk_core::{Agent, Content, Part};
 use adk_runner::{Runner, RunnerConfig};
 
 use arc_swap::ArcSwap;
+use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -328,9 +329,13 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
             },
         ));
 
+        // Deduplication tracker: detects repeated identical tool calls
+        let dedup_tracker: Arc<DashMap<String, (String, u32)>> = Arc::new(DashMap::new());
+
         rebuilt_builder = rebuilt_builder.after_tool_callback_full(Box::new(
             move |ctx, tool, args, result| {
                 let progress = progress_map.clone();
+                let dedup = dedup_tracker.clone();
                 Box::pin(async move {
                     let tool_name = tool.name().to_string();
                     let user_id = ctx.user_id().to_string();
@@ -340,6 +345,32 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
                         result_size = result.to_string().len(),
                         "tool executed"
                     );
+
+                    // Deduplication check: if same tool+args called 10 times, force error
+                    let call_key = format!("{}:{}", tool_name, args);
+                    let repeat_count = {
+                        let mut entry = dedup.entry(user_id.clone()).or_insert_with(|| (String::new(), 0));
+                        if entry.0 == call_key {
+                            entry.1 += 1;
+                            entry.1
+                        } else {
+                            *entry = (call_key, 1);
+                            1
+                        }
+                    };
+
+                    if repeat_count >= 10 {
+                        tracing::error!(
+                            tool = %tool_name,
+                            repeat_count = repeat_count,
+                            "tool call loop detected — same tool+args called 10 times"
+                        );
+                        // Return an error message as the tool result to break the loop
+                        return Ok(Some(serde_json::json!({
+                            "error": "LOOP_DETECTED",
+                            "message": format!("Tool '{}' has been called with the same arguments {} times. This is a loop. STOP calling this tool and respond to the user with what you have so far.", tool_name, repeat_count)
+                        })));
+                    }
 
                     // Send progress message for user-visible tools
                     let emoji = match tool_name.as_str() {
