@@ -35,6 +35,7 @@ pub mod proxy_pool;
 pub mod action_executor;
 pub mod config_watcher;
 pub mod control_panel;
+pub mod gateway;
 pub mod gateway_routes;
 pub mod gateway_state;
 pub mod graph_workflow;
@@ -48,3 +49,17 @@ pub mod telemetry;
 pub mod awp;
 pub mod executable_tools;
 pub mod fallback_chain;
+pub mod health_monitor;
+pub mod heartbeat_v2;
+pub mod multi_user;
+pub mod rate_limiter;
+pub mod schema_sanitizer;
+pub mod stale_context;
+pub mod tool_approval;
+
+pub mod config_encryption;
+
+pub mod coding_agent;
+
+#[cfg(feature = "acp")]
+pub mod acp;

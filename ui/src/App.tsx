@@ -15,6 +15,15 @@ import Memory from './pages/Memory';
 import Settings from './pages/Settings';
 import Setup from './pages/Setup';
 import SetupRedirect from './components/SetupRedirect';
+import CodingAgentsPage from './pages/coding-agents/CodingAgentsPage';
+import AgentListView from './pages/coding-agents/AgentListView';
+import OnboardingWizard from './pages/coding-agents/OnboardingWizard';
+import AgentDetailLayout from './pages/coding-agents/AgentDetailLayout';
+import TaskHistoryTable from './pages/coding-agents/TaskHistoryTable';
+import TaskDetailView from './pages/coding-agents/TaskDetailView';
+import CostStatisticsPanel from './pages/coding-agents/CostStatisticsPanel';
+import TaskDelegationForm from './pages/coding-agents/TaskDelegationForm';
+import AgentConfigurationPanel from './pages/coding-agents/AgentConfigurationPanel';
 
 export default function App() {
   return (
@@ -35,6 +44,17 @@ export default function App() {
           <Route path="logs" element={<Logs />} />
           <Route path="memory" element={<Memory />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="coding-agents" element={<CodingAgentsPage />}>
+            <Route index element={<AgentListView />} />
+            <Route path="new" element={<OnboardingWizard />} />
+            <Route path=":agentId" element={<AgentDetailLayout />}>
+              <Route index element={<TaskHistoryTable />} />
+              <Route path="tasks/:taskId" element={<TaskDetailView />} />
+              <Route path="costs" element={<CostStatisticsPanel />} />
+              <Route path="new-task" element={<TaskDelegationForm />} />
+              <Route path="settings" element={<AgentConfigurationPanel />} />
+            </Route>
+          </Route>
         </Route>
         <Route path="*" element={<Navigate to="/ui" replace />} />
       </Routes>

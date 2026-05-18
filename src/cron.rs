@@ -2,13 +2,19 @@
 //!
 //! Each cron job fires on its configured schedule and either sends a direct
 //! message or routes an `ask:` prompt through the agent pipeline.
+//! Jobs can also target coding agents for automated task delegation.
 //!
 //! Design: CronScheduler [R10.1–R10.5]
 
 use crate::channel::{ChannelType, InboundMessage, MessageSource};
-use crate::config::CronJob;
+use crate::coding_agent::delegator::TaskDelegator;
+use crate::coding_agent::error::CodingAgentError;
+use crate::coding_agent::models::{ReplyTarget, TaskRequest, TaskTrigger};
+use crate::config::{CronJob, CronJobTarget};
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// State of a scheduled cron job.
@@ -53,6 +59,8 @@ impl CronJobState {
 pub struct CronScheduler {
     jobs: HashMap<String, CronJobState>,
     inbound_tx: mpsc::Sender<InboundMessage>,
+    /// Optional task delegator for coding agent targets.
+    task_delegator: Option<Arc<TaskDelegator>>,
 }
 
 impl CronScheduler {
@@ -61,7 +69,25 @@ impl CronScheduler {
         Self {
             jobs: HashMap::new(),
             inbound_tx,
+            task_delegator: None,
         }
+    }
+
+    /// Create a new scheduler with a task delegator for coding agent support.
+    pub fn with_delegator(
+        inbound_tx: mpsc::Sender<InboundMessage>,
+        task_delegator: Arc<TaskDelegator>,
+    ) -> Self {
+        Self {
+            jobs: HashMap::new(),
+            inbound_tx,
+            task_delegator: Some(task_delegator),
+        }
+    }
+
+    /// Set the task delegator for coding agent support.
+    pub fn set_delegator(&mut self, delegator: Arc<TaskDelegator>) {
+        self.task_delegator = Some(delegator);
     }
 
     /// Schedule a single cron job. If a job with the same ID already exists,
@@ -78,8 +104,9 @@ impl CronScheduler {
         // Spawn the cron loop task
         let tx = self.inbound_tx.clone();
         let job_clone = job.clone();
+        let delegator = self.task_delegator.clone();
         tokio::spawn(async move {
-            Self::cron_loop(job_clone, tx, cancel_token).await;
+            Self::cron_loop(job_clone, tx, cancel_token, delegator).await;
         });
 
         tracing::info!(
@@ -87,6 +114,7 @@ impl CronScheduler {
             schedule = %job.schedule,
             message = %job.message,
             delivery = ?job.deliver_to,
+            target = ?job.target,
             "cron job scheduled"
         );
         self.jobs.insert(job.id.clone(), state);
@@ -260,6 +288,7 @@ impl CronScheduler {
         job: CronJob,
         tx: mpsc::Sender<InboundMessage>,
         cancel: tokio_util::sync::CancellationToken,
+        delegator: Option<Arc<TaskDelegator>>,
     ) {
         // Simple cron loop: parse schedule, compute next fire time, sleep, fire.
         // For production, a full cron parser (e.g. `cron` crate) would be used.
@@ -282,27 +311,124 @@ impl CronScheduler {
                     break;
                 }
                 _ = tokio::time::sleep(interval) => {
-                    let msg = Self::build_inbound_message(&job);
-                    let message_kind = if job.message.starts_with("ask:") { "agent_prompt" } else { "direct_message" };
-                    tracing::info!(
-                        job_id = %job.id,
-                        schedule = %job.schedule,
-                        message_kind = message_kind,
-                        message_text = %job.message,
-                        delivery_channel = ?job.deliver_to.as_ref().map(|d| d.channel.as_str()),
-                        delivery_target = ?job.deliver_to.as_ref().map(|d| d.target.as_str()),
-                        "cron job firing"
-                    );
-                    if let Err(e) = tx.send(msg).await {
-                        tracing::error!(
-                            job_id = %job.id,
-                            error = %e,
-                            "failed to send cron message to pipeline"
-                        );
-                    } else {
-                        tracing::info!(job_id = %job.id, "cron job message sent to pipeline successfully");
+                    // Check if this job targets a coding agent
+                    match job.target.as_ref() {
+                        Some(CronJobTarget::CodingAgent { agent_id }) => {
+                            Self::fire_coding_agent_target(&job, agent_id, &delegator).await;
+                        }
+                        _ => {
+                            // Default behavior: send through the inbound message pipeline
+                            Self::fire_standard_target(&job, &tx).await;
+                        }
                     }
                 }
+            }
+        }
+    }
+
+    /// Fire a cron job that targets the standard agent pipeline (SystemAgent or CustomAgent).
+    async fn fire_standard_target(job: &CronJob, tx: &mpsc::Sender<InboundMessage>) {
+        let msg = Self::build_inbound_message(job);
+        let message_kind = if job.message.starts_with("ask:") {
+            "agent_prompt"
+        } else {
+            "direct_message"
+        };
+        tracing::info!(
+            job_id = %job.id,
+            schedule = %job.schedule,
+            message_kind = message_kind,
+            message_text = %job.message,
+            delivery_channel = ?job.deliver_to.as_ref().map(|d| d.channel.as_str()),
+            delivery_target = ?job.deliver_to.as_ref().map(|d| d.target.as_str()),
+            "cron job firing"
+        );
+        if let Err(e) = tx.send(msg).await {
+            tracing::error!(
+                job_id = %job.id,
+                error = %e,
+                "failed to send cron message to pipeline"
+            );
+        } else {
+            tracing::info!(job_id = %job.id, "cron job message sent to pipeline successfully");
+        }
+    }
+
+    /// Fire a cron job that targets a coding agent via the TaskDelegator.
+    ///
+    /// On agent disconnected: logs a warning and skips execution (retry on next trigger).
+    /// On success: logs the task ID. Result delivery is handled by the task executor
+    /// using the configured `deliverTo` channel.
+    async fn fire_coding_agent_target(
+        job: &CronJob,
+        agent_id: &str,
+        delegator: &Option<Arc<TaskDelegator>>,
+    ) {
+        let Some(delegator) = delegator.as_ref() else {
+            tracing::warn!(
+                job_id = %job.id,
+                agent_id = %agent_id,
+                "cron job targets coding agent but no TaskDelegator is configured; skipping"
+            );
+            return;
+        };
+
+        // Build the ReplyTarget from the job's deliverTo configuration
+        let reply_to = match &job.deliver_to {
+            Some(delivery) => ReplyTarget {
+                channel_type: delivery.channel.clone(),
+                channel_id: delivery.target.clone(),
+                message_id: None,
+            },
+            None => ReplyTarget {
+                channel_type: "webhook".to_string(),
+                channel_id: String::new(),
+                message_id: None,
+            },
+        };
+
+        // Build the TaskRequest
+        let task_request = TaskRequest {
+            description: job.message.clone(),
+            trigger: TaskTrigger::CronJob {
+                job_id: job.id.clone(),
+            },
+            workspace: job.workspace.as_ref().map(PathBuf::from),
+            file_context: None,
+            reply_to,
+        };
+
+        tracing::info!(
+            job_id = %job.id,
+            agent_id = %agent_id,
+            workspace = ?job.workspace,
+            "cron job firing: delegating to coding agent"
+        );
+
+        match delegator.delegate(agent_id, task_request).await {
+            Ok(task_id) => {
+                tracing::info!(
+                    job_id = %job.id,
+                    agent_id = %agent_id,
+                    task_id = %task_id,
+                    "cron job successfully delegated to coding agent"
+                );
+            }
+            Err(CodingAgentError::AgentDisconnected(ref msg)) => {
+                tracing::warn!(
+                    job_id = %job.id,
+                    agent_id = %agent_id,
+                    error = %msg,
+                    "coding agent is disconnected; skipping execution, will retry on next trigger"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    job_id = %job.id,
+                    agent_id = %agent_id,
+                    error = %e,
+                    "failed to delegate cron job to coding agent"
+                );
             }
         }
     }
@@ -360,6 +486,9 @@ mod tests {
             schedule: schedule.to_string(),
             message: message.to_string(),
             deliver_to: None,
+            suppress_keyword: None,
+            target: None,
+            workspace: None,
         }
     }
 
@@ -372,6 +501,9 @@ mod tests {
                 channel: channel.to_string(),
                 target: target.to_string(),
             }),
+            suppress_keyword: None,
+            target: None,
+            workspace: None,
         }
     }
 
@@ -549,6 +681,9 @@ mod tests {
             schedule: "@every 60s".into(),
             message: "ask:summarize".into(),
             deliver_to: None,
+            suppress_keyword: None,
+            target: None,
+            workspace: None,
         };
         let msg = CronScheduler::build_inbound_message(&job);
         assert_eq!(
@@ -570,6 +705,9 @@ mod tests {
             schedule: "@every 30s".into(),
             message: "hello world".into(),
             deliver_to: None,
+            suppress_keyword: None,
+            target: None,
+            workspace: None,
         };
         let msg = CronScheduler::build_inbound_message(&job);
         assert_eq!(msg.text, "hello world");
@@ -579,5 +717,215 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("direct_message")
         );
+    }
+
+    // ── Coding agent target tests ──────────────────────────────────
+
+    #[test]
+    fn test_make_job_with_coding_agent_target() {
+        use crate::config::CronJobTarget;
+
+        let job = CronJob {
+            id: "update-deps".to_string(),
+            schedule: "@every 24h".to_string(),
+            message: "Update all npm dependencies to latest versions".to_string(),
+            deliver_to: Some(CronDelivery {
+                channel: "telegram".to_string(),
+                target: "admin-chat".to_string(),
+            }),
+            suppress_keyword: None,
+            target: Some(CronJobTarget::CodingAgent {
+                agent_id: "claude-code-1".to_string(),
+            }),
+            workspace: Some("/home/user/projects/webapp".to_string()),
+        };
+
+        assert_eq!(
+            job.target,
+            Some(CronJobTarget::CodingAgent {
+                agent_id: "claude-code-1".to_string()
+            })
+        );
+        assert_eq!(
+            job.workspace,
+            Some("/home/user/projects/webapp".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fire_coding_agent_target_no_delegator() {
+        // When no delegator is configured, the job should be skipped gracefully
+        let job = CronJob {
+            id: "test-agent-job".to_string(),
+            schedule: "@every 60s".to_string(),
+            message: "fix the bug".to_string(),
+            deliver_to: None,
+            suppress_keyword: None,
+            target: Some(crate::config::CronJobTarget::CodingAgent {
+                agent_id: "agent-1".to_string(),
+            }),
+            workspace: None,
+        };
+
+        // Should not panic — just logs a warning and returns
+        CronScheduler::fire_coding_agent_target(&job, "agent-1", &None).await;
+    }
+
+    #[tokio::test]
+    async fn test_fire_coding_agent_target_agent_disconnected() {
+        use crate::coding_agent::config::CodingAgentInstanceConfig;
+        use crate::coding_agent::cost::CostTracker;
+        use crate::coding_agent::queue::TaskQueue;
+        use crate::coding_agent::registry::CodingAgentRegistry;
+        use crate::coding_agent::status::AgentConnectionStatus;
+
+        let registry = Arc::new(CodingAgentRegistry::new(16));
+        registry
+            .register_agent(CodingAgentInstanceConfig {
+                id: "agent-1".to_string(),
+                backend_type: "claude-code".to_string(),
+                endpoint: "http://localhost:3000/agent-1".to_string(),
+                workspaces: vec![PathBuf::from("/home/user/projects")],
+                timeout_secs: Some(900),
+                cost_cap_usd: None,
+                monthly_budget_usd: None,
+                alias: None,
+                auth: None,
+            })
+            .unwrap();
+        registry
+            .update_status(
+                "agent-1",
+                AgentConnectionStatus::Disconnected {
+                    since: chrono::Utc::now(),
+                },
+            )
+            .unwrap();
+
+        let queue = TaskQueue::new(Some(3));
+        let cost_tracker = Arc::new(CostTracker::new());
+        let delegator = Arc::new(TaskDelegator::new(registry, queue, cost_tracker));
+
+        let job = CronJob {
+            id: "test-agent-job".to_string(),
+            schedule: "@every 60s".to_string(),
+            message: "fix the bug".to_string(),
+            deliver_to: Some(CronDelivery {
+                channel: "telegram".to_string(),
+                target: "admin-chat".to_string(),
+            }),
+            suppress_keyword: None,
+            target: Some(crate::config::CronJobTarget::CodingAgent {
+                agent_id: "agent-1".to_string(),
+            }),
+            workspace: None,
+        };
+
+        // Should not panic — logs warning about disconnected agent and skips
+        CronScheduler::fire_coding_agent_target(&job, "agent-1", &Some(delegator)).await;
+    }
+
+    #[tokio::test]
+    async fn test_fire_coding_agent_target_success() {
+        use crate::coding_agent::config::CodingAgentInstanceConfig;
+        use crate::coding_agent::cost::CostTracker;
+        use crate::coding_agent::models::{ReplyTarget, TaskTrigger};
+        use crate::coding_agent::queue::TaskQueue;
+        use crate::coding_agent::registry::CodingAgentRegistry;
+        use crate::coding_agent::status::AgentConnectionStatus;
+
+        // Use a real temp directory so workspace validation (canonicalize) works
+        let tmp_dir = std::env::temp_dir().join("cron_test_workspace");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        // Canonicalize to resolve symlinks (e.g., /var -> /private/var on macOS)
+        let tmp_dir = tmp_dir.canonicalize().unwrap();
+
+        let registry = Arc::new(CodingAgentRegistry::new(16));
+        registry
+            .register_agent(CodingAgentInstanceConfig {
+                id: "agent-1".to_string(),
+                backend_type: "claude-code".to_string(),
+                endpoint: "http://localhost:3000/agent-1".to_string(),
+                workspaces: vec![tmp_dir.clone()],
+                timeout_secs: Some(900),
+                cost_cap_usd: None,
+                monthly_budget_usd: None,
+                alias: None,
+                auth: None,
+            })
+            .unwrap();
+        registry
+            .update_status("agent-1", AgentConnectionStatus::Connected)
+            .unwrap();
+
+        let queue = TaskQueue::new(Some(3));
+        let cost_tracker = Arc::new(CostTracker::new());
+        let delegator = Arc::new(TaskDelegator::new(registry, queue, cost_tracker));
+
+        // Directly test that delegation succeeds by calling delegate
+        let task_request = TaskRequest {
+            description: "Update npm dependencies".to_string(),
+            trigger: TaskTrigger::CronJob {
+                job_id: "update-deps".to_string(),
+            },
+            workspace: Some(tmp_dir.clone()),
+            file_context: None,
+            reply_to: ReplyTarget {
+                channel_type: "telegram".to_string(),
+                channel_id: "admin-chat".to_string(),
+                message_id: None,
+            },
+        };
+
+        let result = delegator.delegate("agent-1", task_request).await;
+        assert!(result.is_ok(), "Delegation should succeed: {:?}", result.err());
+        let task_id = result.unwrap();
+        assert!(!task_id.is_empty(), "Task ID should not be empty");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_cron_job_target_serialization() {
+        use crate::config::CronJobTarget;
+
+        // Test CodingAgent target serialization
+        let target = CronJobTarget::CodingAgent {
+            agent_id: "claude-code-1".to_string(),
+        };
+        let json = serde_json::to_string(&target).unwrap();
+        let deserialized: CronJobTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(target, deserialized);
+
+        // Test SystemAgent target serialization
+        let target = CronJobTarget::SystemAgent;
+        let json = serde_json::to_string(&target).unwrap();
+        let deserialized: CronJobTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(target, deserialized);
+    }
+
+    #[test]
+    fn test_cron_job_with_target_serialization() {
+        use crate::config::CronJobTarget;
+
+        let job = CronJob {
+            id: "agent-job".to_string(),
+            schedule: "@every 1h".to_string(),
+            message: "run tests".to_string(),
+            deliver_to: Some(CronDelivery {
+                channel: "telegram".to_string(),
+                target: "user123".to_string(),
+            }),
+            suppress_keyword: None,
+            target: Some(CronJobTarget::CodingAgent {
+                agent_id: "kiro-1".to_string(),
+            }),
+            workspace: Some("/workspace/project".to_string()),
+        };
+
+        let json = serde_json::to_string(&job).unwrap();
+        let deserialized: CronJob = serde_json::from_str(&json).unwrap();
+        assert_eq!(job, deserialized);
     }
 }

@@ -149,6 +149,7 @@ pub struct ConfigDiff {
     pub telemetry_changed: bool,
     pub conventions_changed: bool,
     pub hooks_changed: bool,
+    pub coding_agents_changed: bool,
 }
 
 impl ConfigDiff {
@@ -166,6 +167,7 @@ impl ConfigDiff {
             telemetry_changed: old.telemetry != new.telemetry,
             conventions_changed: old.conventions != new.conventions,
             hooks_changed: old.hooks != new.hooks,
+            coding_agents_changed: old.coding_agents != new.coding_agents,
         }
     }
 
@@ -182,6 +184,7 @@ impl ConfigDiff {
             || self.telemetry_changed
             || self.conventions_changed
             || self.hooks_changed
+            || self.coding_agents_changed
     }
 }
 
@@ -322,12 +325,18 @@ mod tests {
                 schedule: "* * * * *".into(),
                 message: "hello".into(),
                 deliver_to: None,
+                suppress_keyword: None,
+                target: None,
+                workspace: None,
             },
             CronJob {
                 id: "job1".into(),
                 schedule: "0 * * * *".into(),
                 message: "world".into(),
                 deliver_to: None,
+                suppress_keyword: None,
+                target: None,
+                workspace: None,
             },
         ];
         let err = validate_config(&config).unwrap_err();
@@ -346,6 +355,8 @@ mod tests {
                 skills: vec![],
                 browser: None,
                 tools: vec![],
+                max_iterations: None,
+                acp: None,
             },
             AgentEntry {
                 id: "agent1".into(),
@@ -355,6 +366,8 @@ mod tests {
                 skills: vec![],
                 browser: None,
                 tools: vec![],
+                max_iterations: None,
+                acp: None,
             },
         ];
         let err = validate_config(&config).unwrap_err();
@@ -408,6 +421,9 @@ mod tests {
             schedule: "* * * * *".into(),
             message: "hello".into(),
             deliver_to: None,
+            suppress_keyword: None,
+            target: None,
+            workspace: None,
         });
         let diff = ConfigDiff::compute(&old, &new);
         assert!(diff.has_changes());
@@ -442,6 +458,8 @@ mod tests {
             skills: vec![],
             browser: None,
             tools: vec![],
+            max_iterations: None,
+            acp: None,
         }];
         config.routing.bindings = vec![RoutingBinding {
             agent_id: "nonexistent".into(),

@@ -1189,6 +1189,8 @@ fn task_create_tool(
                     message: message.clone(),
                     deliver_to: delivery,
                     suppress_keyword,
+                    target: None,
+                    workspace: None,
                 };
 
                 // Persist to config

@@ -15,35 +15,38 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 // ── Hoisted mutable state (accessible inside vi.mock factories) ────
+// IMPORTANT: data must be a stable reference to avoid infinite re-render loops
+// in the Agents component's useEffect that syncs API data to local state.
 
-const { mockRefetch, mockState } = vi.hoisted(() => ({
+const { mockRefetch, mockState, mockData } = vi.hoisted(() => ({
   mockRefetch: vi.fn(),
   mockState: {
     isConnected: true,
     lastEvent: null as unknown,
   },
+  mockData: [
+    {
+      id: 'agent-1',
+      name: 'Test Agent',
+      description: 'A test agent',
+      agent_type: 'a2a',
+      state: 'stopped',
+      port: null,
+      model: 'gpt-4o',
+      tools: ['web_search'],
+      instruction: 'You are a helpful assistant.',
+      api_key_env: 'OPENAI_API_KEY',
+      auto_start: false,
+      channel_bindings: [{ channel_type: 'slack', account_id: 'C12345' }],
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+    },
+  ],
 }));
 
 vi.mock('../../hooks/useApi', () => ({
   useApi: () => ({
-    data: [
-      {
-        id: 'agent-1',
-        name: 'Test Agent',
-        description: 'A test agent',
-        agent_type: 'a2a',
-        state: 'stopped',
-        port: null,
-        model: 'gpt-4o',
-        tools: ['web_search'],
-        instruction: 'You are a helpful assistant.',
-        api_key_env: 'OPENAI_API_KEY',
-        auto_start: false,
-        channel_bindings: [{ channel_type: 'slack', account_id: 'C12345' }],
-        created_at: '2024-01-01T00:00:00Z',
-        updated_at: '2024-01-01T00:00:00Z',
-      },
-    ],
+    data: mockData,
     loading: false,
     error: null,
     refetch: mockRefetch,
@@ -69,6 +72,11 @@ vi.mock('../../api/client', () => ({
     delegationAdd: vi.fn().mockResolvedValue({ ok: true }),
     delegationRemove: vi.fn().mockResolvedValue({ ok: true }),
   },
+}));
+
+// Mock DelegationPermissions to avoid async state updates interfering with fake timers
+vi.mock('../../components/DelegationPermissions', () => ({
+  default: function MockDelegationPermissions() { return null; },
 }));
 
 import Agents from '../Agents';
@@ -111,14 +119,14 @@ describe('Real-Time Agent State Updates', () => {
     render(<Agents />);
 
     // Advance time by 5 seconds to trigger polling
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(5000);
     });
 
     expect(mockRefetch).toHaveBeenCalled();
 
     // Advance again
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(5000);
     });
 
@@ -127,13 +135,13 @@ describe('Real-Time Agent State Updates', () => {
     vi.useRealTimers();
   });
 
-  it('does not poll when WebSocket is connected', () => {
+  it('does not poll when WebSocket is connected', async () => {
     vi.useFakeTimers();
     mockState.isConnected = true;
 
     render(<Agents />);
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(10000);
     });
 

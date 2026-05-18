@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
+import { useApi } from '../hooks/useApi';
 import AlertBanner from '../components/AlertBanner';
+import PairedUsersTable from '../components/PairedUsersTable';
+import type { PairedUser, GroupChatAssignment } from '../types';
 
 const DM_POLICIES = ['open', 'pairing', 'allowlist', 'disabled'] as const;
 const STREAM_MODES = ['partial', 'complete'] as const;
@@ -545,8 +548,85 @@ export default function Channels() {
             </ol>
           </div>
         )}
+
+        {/* Paired Users (Task 19) */}
+        <PairedUsersSection />
       </div>
       )}
+    </div>
+  );
+}
+
+// ── Paired Users Section (Task 19) ────────────────────────────────
+
+function PairedUsersSection() {
+  const { data: pairedUsers, refetch } = useApi<PairedUser[]>(() => api.getPairedUsers(), []);
+  const { data: groupAssignments } = useApi<GroupChatAssignment[]>(() => api.getGroupAssignments(), []);
+  const [showGroupForm, setShowGroupForm] = useState(false);
+  const [groupForm, setGroupForm] = useState<GroupChatAssignment>({ group_id: '', agent_id: '' });
+
+  const handleSaveGroup = async () => {
+    if (!groupForm.group_id || !groupForm.agent_id) return;
+    await api.saveGroupAssignment(groupForm);
+    setGroupForm({ group_id: '', agent_id: '' });
+    setShowGroupForm(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-lg font-semibold">Paired Users</h3>
+      <PairedUsersTable users={pairedUsers || []} onRefresh={refetch} />
+
+      {/* Group Chat Config */}
+      <div className="bg-white rounded-xl shadow-sm p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold text-gray-700">Group Chat Assignments</h4>
+          <button
+            onClick={() => setShowGroupForm(!showGroupForm)}
+            className="px-3 py-1 text-xs font-medium text-[var(--color-accent)] bg-blue-50 rounded-lg hover:bg-blue-100"
+          >
+            {showGroupForm ? 'Cancel' : '+ Assign Agent'}
+          </button>
+        </div>
+
+        {showGroupForm && (
+          <div className="flex gap-2 mb-3">
+            <input
+              type="text"
+              value={groupForm.group_id}
+              onChange={(e) => setGroupForm({ ...groupForm, group_id: e.target.value })}
+              placeholder="Group/Thread ID"
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
+            />
+            <input
+              type="text"
+              value={groupForm.agent_id}
+              onChange={(e) => setGroupForm({ ...groupForm, agent_id: e.target.value })}
+              placeholder="Agent ID"
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
+            />
+            <button
+              onClick={handleSaveGroup}
+              className="px-4 py-2 text-sm font-medium bg-[var(--color-accent)] text-white rounded-lg hover:bg-[var(--color-accent-hover)]"
+            >
+              Save
+            </button>
+          </div>
+        )}
+
+        {groupAssignments && groupAssignments.length > 0 ? (
+          <div className="space-y-1">
+            {groupAssignments.map((ga) => (
+              <div key={ga.group_id} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg">
+                <span className="text-sm font-mono text-gray-700">{ga.group_id}{ga.thread_id ? ` / ${ga.thread_id}` : ''}</span>
+                <span className="text-sm text-gray-600">→ {ga.agent_id}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-sm text-gray-400">No group assignments configured</div>
+        )}
+      </div>
     </div>
   );
 }

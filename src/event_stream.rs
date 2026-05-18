@@ -43,6 +43,10 @@ pub struct CollectedResponse {
     pub token_count: Option<TokenCount>,
     /// Wall-clock duration of the collection.
     pub duration: Duration,
+    /// Whether the runner hit the max iterations limit.
+    pub max_iterations_reached: bool,
+    /// The number of iterations the runner executed (set when max_iterations_reached is true).
+    pub iteration_count: Option<u32>,
 }
 
 /// An image returned in the agent's response.
@@ -118,11 +122,22 @@ impl EventStreamCollector {
         let mut images: Vec<ImageData> = Vec::new();
         let mut token_count: Option<TokenCount> = None;
         let mut error_text: Option<String> = None;
+        let mut max_iterations_reached = false;
+        let mut iteration_count: Option<u32> = None;
 
         while let Some(result) = self.stream.next().await {
             match result {
                 Ok(event) => {
                     let prev_partial = last_partial_text.clone();
+
+                    // Extract max_iterations metadata from provider_metadata
+                    if event.provider_metadata.get("max_iterations_reached").map(|v| v == "true").unwrap_or(false) {
+                        max_iterations_reached = true;
+                        if let Some(count_str) = event.provider_metadata.get("iteration_count") {
+                            iteration_count = count_str.parse::<u32>().ok();
+                        }
+                    }
+
                     Self::process_event(
                         &event,
                         &mut last_partial_text,
@@ -161,6 +176,8 @@ impl EventStreamCollector {
             images,
             token_count,
             duration,
+            max_iterations_reached,
+            iteration_count,
         }
     }
 
@@ -445,5 +462,47 @@ mod tests {
         assert_eq!(resp.tool_calls.len(), 1);
         assert_eq!(resp.tool_calls[0].name, "search");
         assert!(resp.tool_calls[0].id.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_max_iterations_metadata_extracted() {
+        let mut event = Event::new("test-invocation");
+        event.author = "assistant".to_string();
+        event.llm_response.partial = false;
+        event.llm_response.turn_complete = true;
+        event.llm_response.interrupted = true;
+        event.llm_response.content = Some(Content {
+            role: "model".to_string(),
+            parts: vec![Part::Text {
+                text: "Agent execution stopped: max iterations (25) reached.".to_string(),
+            }],
+        });
+        event.provider_metadata.insert(
+            "max_iterations_reached".to_string(),
+            "true".to_string(),
+        );
+        event.provider_metadata.insert(
+            "iteration_count".to_string(),
+            "25".to_string(),
+        );
+
+        let events = vec![Ok(event)];
+        let resp = EventStreamCollector::new(events_to_stream(events))
+            .collect()
+            .await;
+
+        assert!(resp.max_iterations_reached);
+        assert_eq!(resp.iteration_count, Some(25));
+    }
+
+    #[tokio::test]
+    async fn test_no_max_iterations_metadata_when_not_reached() {
+        let events = vec![Ok(make_event("assistant", false, "normal response"))];
+        let resp = EventStreamCollector::new(events_to_stream(events))
+            .collect()
+            .await;
+
+        assert!(!resp.max_iterations_reached);
+        assert_eq!(resp.iteration_count, None);
     }
 }

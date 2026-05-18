@@ -10,6 +10,7 @@ export default function Sessions() {
   const { lastEvent, isConnected } = useWebSocket();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [terminateTarget, setTerminateTarget] = useState<string | null>(null);
+  const [userFilter, setUserFilter] = useState<string>('');
 
   // Auto-refresh from WebSocket dashboard events
   useEffect(() => {
@@ -35,18 +36,49 @@ export default function Sessions() {
   if (error) return <div className="text-red-600">Failed to load sessions: {error}</div>;
 
   const sessions = data || [];
+  const filteredSessions = userFilter
+    ? sessions.filter((s) => s.user_id.toLowerCase().includes(userFilter.toLowerCase()))
+    : sessions;
+
+  // Get unique user IDs for filter suggestions
+  const uniqueUsers = [...new Set(sessions.map((s) => s.user_id))];
 
   return (
     <div>
       <div className="flex items-center gap-3 mb-5">
         <h2 className="text-2xl font-semibold">Sessions</h2>
         <span className="bg-gray-200 text-gray-700 text-xs font-semibold px-2.5 py-0.5 rounded-full">
-          {sessions.length} total
+          {filteredSessions.length}{userFilter ? ` / ${sessions.length}` : ''} total
         </span>
       </div>
 
-      {sessions.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">No active sessions</div>
+      {/* User filter (Task 19) */}
+      <div className="flex items-center gap-3 mb-4">
+        <input
+          type="text"
+          value={userFilter}
+          onChange={(e) => setUserFilter(e.target.value)}
+          placeholder="Filter by user ID..."
+          list="user-suggestions"
+          className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)] min-w-[250px]"
+        />
+        <datalist id="user-suggestions">
+          {uniqueUsers.map((u) => <option key={u} value={u} />)}
+        </datalist>
+        {userFilter && (
+          <button
+            onClick={() => setUserFilter('')}
+            className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {filteredSessions.length === 0 ? (
+        <div className="text-center py-12 text-gray-400">
+          {userFilter ? `No sessions found for "${userFilter}"` : 'No active sessions'}
+        </div>
       ) : (
         <div className="bg-white rounded-xl shadow-sm overflow-hidden">
           <table className="w-full">
@@ -60,7 +92,7 @@ export default function Sessions() {
               </tr>
             </thead>
             <tbody>
-              {sessions.map((s) => (
+              {filteredSessions.map((s) => (
                 <SessionRow
                   key={s.session_id}
                   session={s}

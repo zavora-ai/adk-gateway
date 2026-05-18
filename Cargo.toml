@@ -1,14 +1,29 @@
 [package]
 name = "adk-gateway"
-version = "0.8.0"
+version = "0.8.2"
 edition = "2021"
 rust-version = "1.85.0"
 license = "Apache-2.0"
 authors = ["James Karanja Maina <james.karanja@zavora.ai>"]
 description = "Multi-channel AI gateway for adk-rust agents — Telegram, Slack, WhatsApp, Discord, Matrix + control panel"
 repository = "https://github.com/zavora-ai/adk-gateway"
+homepage = "https://github.com/zavora-ai/adk-gateway"
+readme = "README.md"
 keywords = ["ai", "agent", "gateway", "telegram", "slack"]
 categories = ["web-programming", "asynchronous"]
+exclude = [
+    "com.zavora.adk-gateway.plist",
+    "adk-gateway.service",
+    "scripts/",
+    ".github/",
+    ".kiro/",
+    ".playwright-mcp/",
+    "logs/",
+    "context/",
+    "reference/",
+    "agents/",
+    "business.toml",
+]
 
 [[bin]]
 name = "adk-gateway"
@@ -19,23 +34,28 @@ name = "multi_agent_demo"
 path = "examples/multi_agent_demo.rs"
 
 [dependencies]
-# ADK crates (published on crates.io)
-adk-core = "0.8"
-adk-agent = "0.8"
-adk-runner = "0.8"
-adk-session = "0.8"
-adk-server = "0.8"
-adk-artifact = "0.8"
-adk-model = { version = "0.8", features = ["gemini", "openai", "anthropic", "ollama", "deepseek", "groq", "openrouter", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova"] }
-adk-tool = { version = "0.8", features = ["mcp"] }
-adk-skill = "0.8"
-adk-plugin = "0.8"
-adk-telemetry = "0.8"
-adk-auth = "0.8"
-adk-graph = "0.8"
-adk-memory = "0.8"
-awp-types = "0.8"
-adk-awp = "0.8"
+# ADK umbrella crate (local path to workspace member)
+adk-rust = { path = "../adk-rust/adk-rust", features = ["standard", "mcp", "gemini", "openai", "anthropic", "ollama", "deepseek", "groq", "openrouter", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova"] }
+
+# Direct access to individual ADK crates for gateway-specific needs
+adk-core = { path = "../adk-rust/adk-core" }
+adk-agent = { path = "../adk-rust/adk-agent" }
+adk-runner = { path = "../adk-rust/adk-runner" }
+adk-session = { path = "../adk-rust/adk-session" }
+adk-server = { path = "../adk-rust/adk-server" }
+adk-artifact = { path = "../adk-rust/adk-artifact" }
+adk-model = { path = "../adk-rust/adk-model", features = ["gemini", "openai", "anthropic", "ollama", "deepseek", "groq", "openrouter", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova"] }
+adk-tool = { path = "../adk-rust/adk-tool", features = ["mcp"] }
+adk-skill = { path = "../adk-rust/adk-skill" }
+adk-plugin = { path = "../adk-rust/adk-plugin" }
+adk-telemetry = { path = "../adk-rust/adk-telemetry" }
+adk-auth = { path = "../adk-rust/adk-auth" }
+adk-graph = { path = "../adk-rust/adk-graph" }
+adk-memory = { path = "../adk-rust/adk-memory" }
+awp-types = { path = "../adk-rust/awp-types" }
+adk-awp = { path = "../adk-rust/adk-awp" }
+adk-deploy = { path = "../adk-rust/adk-deploy" }
+adk-sandbox = { path = "../adk-rust/adk-sandbox" }
 
 # Embedded UI assets
 rust-embed = { version = "8", features = ["mime-guess"] }
@@ -88,6 +108,9 @@ subtle = "2"
 # Cryptographic randomness
 rand = "0.8"
 
+# AES-256-GCM encryption for config secrets
+aes-gcm = "0.10"
+
 # JWT / JWKS
 jsonwebtoken = "9"
 base64 = "0.22"
@@ -104,15 +127,20 @@ hex = "0.4"
 urlencoding = "2"
 url = "2.5"
 
+# Systemd readiness signaling (Linux-only)
+[target.'cfg(target_os = "linux")'.dependencies]
+sd-notify = "0.4"
+
 [features]
 default = []
 browser = ["dep:adk-browser"]
 postgres = ["dep:sqlx-core", "dep:sqlx-postgres"]
 redis = ["dep:redis"]
 firestore = ["dep:google-cloud-auth", "dep:google-cloud-token"]
+acp = []
 
 [dependencies.adk-browser]
-version = "0.8"
+path = "../adk-rust/adk-browser"
 optional = true
 
 [dependencies.sqlx-core]
@@ -148,22 +176,3 @@ tempfile = "3"
 proptest = "1"
 wiremock = "0.6"
 
-# Local development overrides — remove before `cargo publish`
-[patch.crates-io]
-adk-core = { path = "../adk-rust/adk-core" }
-adk-agent = { path = "../adk-rust/adk-agent" }
-adk-runner = { path = "../adk-rust/adk-runner" }
-adk-session = { path = "../adk-rust/adk-session" }
-adk-server = { path = "../adk-rust/adk-server" }
-adk-artifact = { path = "../adk-rust/adk-artifact" }
-adk-model = { path = "../adk-rust/adk-model" }
-adk-tool = { path = "../adk-rust/adk-tool" }
-adk-skill = { path = "../adk-rust/adk-skill" }
-adk-plugin = { path = "../adk-rust/adk-plugin" }
-adk-telemetry = { path = "../adk-rust/adk-telemetry" }
-adk-auth = { path = "../adk-rust/adk-auth" }
-adk-graph = { path = "../adk-rust/adk-graph" }
-adk-memory = { path = "../adk-rust/adk-memory" }
-adk-browser = { path = "../adk-rust/adk-browser" }
-awp-types = { path = "../adk-rust/awp-types" }
-adk-awp = { path = "../adk-rust/adk-awp" }

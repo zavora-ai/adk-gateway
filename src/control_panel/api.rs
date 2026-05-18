@@ -699,6 +699,8 @@ pub async fn scheduled_task_create(
         message,
         deliver_to: delivery,
         suppress_keyword,
+        target: None,
+        workspace: None,
     };
 
     // Persist to config
@@ -833,6 +835,8 @@ pub async fn scheduled_task_resume(
                 target: "last".to_string(),
             }),
             suppress_keyword: Some("HEARTBEAT_OK".to_string()),
+            target: None,
+            workspace: None,
         });
     }
 

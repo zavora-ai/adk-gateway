@@ -19,6 +19,7 @@ use crate::gateway_state::{self, GatewayState};
 use crate::metrics::MessageStatus;
 use crate::model_factory;
 use crate::pairing::PairingResult;
+use crate::rate_limiter::{RateLimitDecision, RateLimiter};
 use crate::router::MessageRouter;
 use crate::webhook::WebhookHandler;
 
@@ -26,15 +27,43 @@ use adk_agent::LlmAgentBuilder;
 use adk_core::{Agent, Content, Part};
 use adk_runner::{Runner, RunnerConfig};
 
+use anyhow::Context;
 use arc_swap::ArcSwap;
-use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 /// Run the gateway with the given configuration.
-pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyhow::Result<()> {
+pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> anyhow::Result<()> {
+    // ── Decrypt encrypted config values at startup ─────────────────
+    {
+        use crate::config_encryption::{has_encrypted_values, validate_encryption_at_startup};
+
+        let key_file = config.gateway.encryption.as_ref().map(|e| e.key_file.as_path());
+        let mut config_value = serde_json::to_value(&config)
+            .context("failed to serialize config for encryption check")?;
+
+        if has_encrypted_values(&config_value) {
+            let encryptor = validate_encryption_at_startup(&config_value, key_file)
+                .map_err(|e| {
+                    tracing::error!(%e, "config encryption error — cannot start gateway");
+                    anyhow::anyhow!("{e}")
+                })?
+                .ok_or_else(|| anyhow::anyhow!("encrypted values present but no decryption key available"))?;
+
+            encryptor.decrypt_config(&mut config_value).map_err(|e| {
+                tracing::error!(%e, "failed to decrypt config values");
+                anyhow::anyhow!("config decryption failed: {e}")
+            })?;
+
+            config = serde_json::from_value(config_value)
+                .context("failed to deserialize decrypted config")?;
+
+            tracing::info!("decrypted encrypted config values at startup");
+        }
+    }
+
     // ── Build model with fallback chain (R16) ──────────────────────
     let primary_chain = {
         let model_ids = config
@@ -276,10 +305,13 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
             tracing::info!("attached {} MCP toolsets to root agent", mcp_toolsets.len());
         }
 
-        // Add observability callbacks for LLM requests and tool calls
+        // Add observability callbacks for LLM requests and tool calls.
+        // The before_model_callback also applies provider-specific schema sanitization
+        // at model invocation time (Req 5.6). Original MCP tool schemas are stored
+        // unmodified in gateway state; transformations happen here, lazily per-provider.
         let progress_map = state.progress_messages.clone();
         rebuilt_builder = rebuilt_builder.before_model_callback(Box::new(
-            |_ctx, req| {
+            |_ctx, mut req| {
                 Box::pin(async move {
                     let tool_count = req.tools.len();
                     tracing::info!(
@@ -287,6 +319,34 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
                         tools_declared = tool_count,
                         "LLM request sending"
                     );
+
+                    // Apply provider-specific schema sanitization at invocation time.
+                    // Gemini requires certain JSON Schema properties to be removed or
+                    // transformed; other providers receive schemas unmodified.
+                    let provider = req.model.split('/').next().unwrap_or(&req.model);
+                    let needs_sanitization = matches!(provider, "gemini" | "google");
+
+                    if !req.tools.is_empty() {
+                        use crate::schema_sanitizer::{GeminiSanitizer, IdentitySanitizer, SchemaSanitizer};
+                        let sanitizer: &dyn SchemaSanitizer = if needs_sanitization {
+                            &GeminiSanitizer
+                        } else {
+                            &IdentitySanitizer
+                        };
+                        let sanitized: std::collections::HashMap<String, serde_json::Value> = req
+                            .tools
+                            .into_iter()
+                            .map(|(name, schema)| (name, sanitizer.sanitize(&schema)))
+                            .collect();
+                        req.tools = sanitized;
+                        if needs_sanitization {
+                            tracing::debug!(
+                                tool_count = tool_count,
+                                "applied Gemini schema sanitization to tool schemas"
+                            );
+                        }
+                    }
+
                     Ok(adk_core::BeforeModelResult::Continue(req))
                 })
             },
@@ -329,13 +389,49 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
             },
         ));
 
-        // Deduplication tracker: detects repeated identical tool calls
-        let dedup_tracker: Arc<DashMap<String, (String, u32)>> = Arc::new(DashMap::new());
+        // Rate limiter: replaces the old dedup tracker with a sliding-window
+        // rate limiter that detects runaway tool loops more robustly.
+        let rate_limit_config = {
+            let cfg = state.config.load();
+            cfg.rate_limiter.clone()
+        };
+        let rate_limiter = Arc::new(Mutex::new(
+            RateLimiter::new(rate_limit_config),
+        ));
+        // Log rate limiter configuration at startup for diagnostics
+        {
+            let mut rl = rate_limiter.lock().await;
+            let rl_cfg = rl.config();
+            tracing::debug!(
+                max_calls = rl_cfg.max_calls,
+                window_secs = rl_cfg.window_secs,
+                cooldown_secs = rl_cfg.cooldown_secs,
+                window_count = rl.window_count(Instant::now()),
+                trigger_count = rl.trigger_count(),
+                "rate limiter initialized"
+            );
+            // Reset to ensure clean state before first request
+            rl.reset();
+        }
+        // Validate that with_defaults() produces a usable rate limiter
+        let _ = RateLimiter::with_defaults();
+
+        // Max iterations: gateway-level iteration counter that terminates
+        // the tool-call loop when the configured limit is reached.
+        // Implemented here (not in adk-rust) to avoid modifying upstream.
+        // Uses resolve_max_iterations() to support per-agent overrides.
+        let max_iterations_limit = {
+            let cfg = state.config.load();
+            cfg.runner.resolve_max_iterations(None)
+        };
+        let iteration_counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
         rebuilt_builder = rebuilt_builder.after_tool_callback_full(Box::new(
             move |ctx, tool, args, result| {
                 let progress = progress_map.clone();
-                let dedup = dedup_tracker.clone();
+                let limiter = rate_limiter.clone();
+                let iter_counter = iteration_counter.clone();
+                let max_iter = max_iterations_limit;
                 Box::pin(async move {
                     let tool_name = tool.name().to_string();
                     let user_id = ctx.user_id().to_string();
@@ -346,30 +442,50 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
                         "tool executed"
                     );
 
-                    // Deduplication check: if same tool+args called 10 times, force error
-                    let call_key = format!("{}:{}", tool_name, args);
-                    let repeat_count = {
-                        let mut entry = dedup.entry(user_id.clone()).or_insert_with(|| (String::new(), 0));
-                        if entry.0 == call_key {
-                            entry.1 += 1;
-                            entry.1
-                        } else {
-                            *entry = (call_key, 1);
-                            1
-                        }
+                    // Max iterations check: terminate if we've exceeded the limit
+                    let iteration = iter_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    if iteration >= max_iter {
+                        tracing::warn!(
+                            tool = %tool_name,
+                            iteration_count = iteration,
+                            max_iterations = max_iter,
+                            "max iterations reached, terminating request"
+                        );
+                        return Ok(Some(serde_json::json!({
+                            "error": "MAX_ITERATIONS_REACHED",
+                            "message": format!("Agent execution stopped: max iterations ({}) reached. Partial result returned.", max_iter),
+                            "iteration_count": iteration,
+                            "max_iterations_reached": true
+                        })));
+                    }
+
+                    // Rate limiter check: sliding window detects rapid tool invocations
+                    let decision = {
+                        let mut rl = limiter.lock().await;
+                        rl.record_invocation(&tool_name, Instant::now())
                     };
 
-                    if repeat_count >= 10 {
-                        tracing::error!(
-                            tool = %tool_name,
-                            repeat_count = repeat_count,
-                            "tool call loop detected — same tool+args called 10 times"
-                        );
-                        // Return an error message as the tool result to break the loop
-                        return Ok(Some(serde_json::json!({
-                            "error": "LOOP_DETECTED",
-                            "message": format!("Tool '{}' has been called with the same arguments {} times. This is a loop. STOP calling this tool and respond to the user with what you have so far.", tool_name, repeat_count)
-                        })));
+                    match decision {
+                        RateLimitDecision::Pause { duration } => {
+                            tracing::warn!(
+                                tool = %tool_name,
+                                cooldown_ms = duration.as_millis(),
+                                "rate limit exceeded, pausing execution"
+                            );
+                            tokio::time::sleep(duration).await;
+                        }
+                        RateLimitDecision::Terminate { reason } => {
+                            tracing::error!(
+                                tool = %tool_name,
+                                reason = %reason,
+                                "rate limiter terminating request"
+                            );
+                            return Ok(Some(serde_json::json!({
+                                "error": "RATE_LIMIT_TERMINATED",
+                                "message": reason
+                            })));
+                        }
+                        RateLimitDecision::Allow => {}
                     }
 
                     // Send progress message for user-visible tools
@@ -642,6 +758,14 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
                     webhook_handler.update_config(new_config.hooks.clone());
                 }
 
+                // Coding agents changed → reload backends in registry
+                if diff.coding_agents_changed {
+                    if let Some(ref ca_registry) = state.coding_agent_registry {
+                        tracing::info!("hot-reload: reloading coding agent backends");
+                        ca_registry.reload_from_config(&new_config.coding_agents);
+                    }
+                }
+
                 old_config = new_config;
             }
             tracing::info!("config watcher channel closed, hot-reload task exiting");
@@ -681,7 +805,10 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
 
     // ── Cron scheduler ─────────────────────────────────────────────
     let cron_scheduler = {
-        let mut scheduler = CronScheduler::new(inbound_tx.clone());
+        let mut scheduler = match state.coding_agent_delegator.as_ref() {
+            Some(delegator) => CronScheduler::with_delegator(inbound_tx.clone(), delegator.clone()),
+            None => CronScheduler::new(inbound_tx.clone()),
+        };
 
         // Auto-create system heartbeat job if not already configured
         let has_heartbeat = config.cron.jobs.iter().any(|j| j.id == "heartbeat");
@@ -711,6 +838,8 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
                     target: "last".to_string(),
                 }),
                 suppress_keyword: Some("HEARTBEAT_OK".to_string()),
+                target: None,
+                workspace: None,
             };
             if let Err(e) = scheduler.schedule(heartbeat_job) {
                 tracing::warn!(error = %e, "failed to schedule system heartbeat");
@@ -780,12 +909,44 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
         }
     });
 
+    // ── SIGUSR1 graceful restart handler (Unix only) ───────────────
+    #[cfg(unix)]
+    {
+        let coordinator = state.shutdown_coordinator.clone();
+        crate::shutdown::register_sigusr1_handler(coordinator).await;
+        tracing::info!("SIGUSR1 graceful restart handler registered");
+    }
+
+    // ── Log retention background task ──────────────────────────────
+    if let Some(ref log_dir) = config.telemetry.log_dir {
+        let _log_retention_handle = crate::telemetry::spawn_log_retention_task(
+            log_dir.clone(),
+            config.telemetry.log_rotation.clone(),
+            state.shutdown.clone(),
+        );
+        tracing::info!(log_dir = %log_dir, "log retention task started");
+    }
+
     // ── HTTP server ────────────────────────────────────────────────
     let app = gateway_routes::build_router(&state, webhook_handler);
     let bind_addr = format!("{}:{}", config.gateway.bind.to_addr(), port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "HTTP server listening");
     tracing::info!("📊 Control panel: http://{bind_addr}/ui");
+
+    // ── sd_notify(READY=1) — Systemd readiness signaling ───────────────────
+    // When running under systemd with Type=notify, the gateway signals that
+    // initialization is complete and it is ready to accept connections.
+    // This is called AFTER the TCP listener is bound and all subsystems are
+    // initialized, but BEFORE entering the main event loop.
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(e) = sd_notify::notify(false, &[sd_notify::NotifyState::Ready]) {
+            tracing::warn!("sd_notify READY=1 failed: {e}");
+        } else {
+            tracing::info!("sd_notify: READY=1 (systemd readiness signal sent)");
+        }
+    }
 
     let shutdown_coordinator = state.shutdown_coordinator.clone();
     let shutdown = state.shutdown.clone();
@@ -819,8 +980,14 @@ pub async fn run(config: GatewayConfig, port: u16, config_path: PathBuf) -> anyh
             futures::future::join_all(shutdown_futures).await;
         }
         _ = tokio::signal::ctrl_c() => {
-            tracing::info!("ctrl-c received, draining...");
+            tracing::info!(
+                drain_timeout_secs = shutdown_coordinator.drain_timeout().as_secs(),
+                "ctrl-c received, draining..."
+            );
             shutdown_coordinator.initiate_shutdown().await;
+            if shutdown_coordinator.is_restart() {
+                tracing::info!("shutdown was triggered by restart (SIGUSR1)");
+            }
             // Shut down channels in parallel with a timeout
             let shutdown_futures: Vec<_> = state.channel_map.iter().map(|entry| {
                 let ch = entry.value().clone();
@@ -1037,10 +1204,47 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     }
 
     // Session
+    // Capture last_activity BEFORE resolve_session updates it (for stale context detection)
+    let previous_last_activity = state.session_bridge.get_last_activity(&msg);
     let (user_id, session_id) = state.session_bridge.resolve_session(&msg);
     let router_guard = state.router.load();
     let agent_id = router_guard.resolve_agent(&msg);
     tracing::info!(channel = %msg.channel_type, sender = %msg.sender_id, agent = agent_id, session = %session_id, "processing");
+
+    // ── Stale Context Detection (Req 2) ──
+    // Check if the user has been idle beyond the configured threshold.
+    // We captured last_activity before resolve_session updated it to now.
+    {
+        let config_guard = state.config.load();
+        let stale_config = &config_guard.stale_context;
+        let detector = crate::stale_context::StaleContextDetector::new(stale_config.clone());
+        let default_detector = crate::stale_context::StaleContextDetector::with_defaults();
+        tracing::debug!(
+            idle_threshold_secs = detector.idle_threshold_secs(),
+            using_custom_config = (detector.config() != default_detector.config()),
+            "stale context check"
+        );
+
+        if let Some(last_activity) = previous_last_activity {
+            let now = chrono::Utc::now();
+            if detector.is_stale(last_activity, now) {
+                let idle_duration = detector.idle_duration(last_activity, now);
+                // Build welcome-back message (no pending tasks/alerts yet — those require
+                // heartbeat V2 integration which is a separate task)
+                let welcome_msg = detector.build_welcome_back(
+                    idle_duration,
+                    &[], // pending tasks — populated when heartbeat V2 is integrated
+                    &[], // heartbeat alerts — populated when heartbeat V2 is integrated
+                );
+                tracing::info!(
+                    sender = %msg.sender_id,
+                    idle_secs = idle_duration.num_seconds(),
+                    "stale context detected, sending welcome-back"
+                );
+                send_reply(&msg, state, &welcome_msg).await;
+            }
+        }
+    }
 
     // Send typing indicator to show the bot is working.
     // Spawn a background task that re-sends typing every 4 seconds until dropped.
@@ -1657,7 +1861,10 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
         artifact_service: None,
         memory_service: None,
         plugin_manager: None,
-        run_config: None,
+        run_config: Some({
+            let rc = adk_core::RunConfig::default();
+            rc
+        }),
         compaction_config: None,
         context_cache_config: None,
         cache_capable: None,
@@ -1726,7 +1933,10 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
                         artifact_service: None,
                         memory_service: None,
                         plugin_manager: None,
-                        run_config: None,
+                        run_config: Some({
+                            let rc = adk_core::RunConfig::default();
+                            rc
+                        }),
                         compaction_config: None,
                         context_cache_config: None,
                         cache_capable: None,
@@ -1903,8 +2113,11 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
         stream_duration_ms = %stream_duration.as_millis(),
         tool_call_count = tool_call_count,
         tools = ?collected.tool_calls.iter().map(|tc| tc.name.as_str()).collect::<Vec<_>>(),
+        max_iterations_reached = collected.max_iterations_reached,
+        iteration_count = ?collected.iteration_count,
         "message processed"
     );
+
     state.metrics.record_message(
         &channel_name,
         MessageStatus::Success,

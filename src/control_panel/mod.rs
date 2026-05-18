@@ -10,13 +10,17 @@ use axum::response::IntoResponse;
 pub mod agent_setup;
 pub mod agents;
 pub mod api;
+pub mod approvals;
 pub mod auth;
 pub mod channels;
+pub mod coding_agents;
 pub mod config_page;
+pub mod onboarding;
 pub mod dashboard;
 pub mod delegation;
 pub mod logs;
 pub mod memory;
+pub mod phase2_api;
 pub mod sessions;
 pub mod settings;
 pub mod ws;
@@ -153,6 +157,10 @@ pub struct ControlPanelState {
     pub ui_sessions: Arc<dashmap::DashMap<String, auth::UiSession>>,
     /// Delegation permission store.
     pub delegation_store: delegation::DelegationStore,
+    /// Optional reference to the coding agent registry for real-time status events.
+    pub coding_agent_registry: Option<Arc<crate::coding_agent::registry::CodingAgentRegistry>>,
+    /// Coding agent panel state for REST API handlers (None when coding agents are disabled).
+    pub coding_agent_state: Option<coding_agents::CodingAgentPanelState>,
 }
 
 impl std::fmt::Debug for ControlPanelState {
@@ -190,6 +198,8 @@ impl ControlPanelState {
             bind_address: None,
             ui_sessions: Arc::new(dashmap::DashMap::new()),
             delegation_store: delegation::new_delegation_store(),
+            coding_agent_registry: None,
+            coding_agent_state: None,
         }
     }
 
@@ -270,6 +280,22 @@ impl ControlPanelState {
 
     pub fn with_bind_address(mut self, bind_address: String) -> Self {
         self.bind_address = Some(bind_address);
+        self
+    }
+
+    pub fn with_coding_agent_registry(
+        mut self,
+        registry: Arc<crate::coding_agent::registry::CodingAgentRegistry>,
+    ) -> Self {
+        self.coding_agent_registry = Some(registry);
+        self
+    }
+
+    pub fn with_coding_agent_state(
+        mut self,
+        ca_state: coding_agents::CodingAgentPanelState,
+    ) -> Self {
+        self.coding_agent_state = Some(ca_state);
         self
     }
 
@@ -540,6 +566,200 @@ pub fn build_routes(state: Arc<ControlPanelState>) -> axum::Router<Arc<ControlPa
             axum::routing::get(delegation::api_delegation_list)
                 .post(delegation::api_delegation_add)
                 .delete(delegation::api_delegation_remove),
+        )
+        // Tool Approval (Task 14)
+        .route(
+            "/ui/api/approvals/pending",
+            axum::routing::get(approvals::pending_approvals),
+        )
+        .route(
+            "/ui/api/approvals/history",
+            axum::routing::get(approvals::approval_history),
+        )
+        .route(
+            "/ui/api/approvals/{id}/approve",
+            axum::routing::post(approvals::approve_request),
+        )
+        .route(
+            "/ui/api/approvals/{id}/reject",
+            axum::routing::post(approvals::reject_request),
+        )
+        .route(
+            "/ui/api/approvals/config",
+            axum::routing::get(approvals::get_approval_config)
+                .post(approvals::save_approval_config),
+        )
+        // Phase 2 API routes (Tasks 15-22)
+        // Task 15: Stale Context
+        .route(
+            "/ui/api/settings/stale-context",
+            axum::routing::get(phase2_api::get_stale_context_config)
+                .post(phase2_api::save_stale_context_config),
+        )
+        .route(
+            "/ui/api/users/activity",
+            axum::routing::get(phase2_api::get_user_activities),
+        )
+        // Task 16: Rate Limiter
+        .route(
+            "/ui/api/settings/rate-limit",
+            axum::routing::get(phase2_api::get_rate_limit_config)
+                .post(phase2_api::save_rate_limit_config),
+        )
+        .route(
+            "/ui/api/settings/rate-limit/metrics",
+            axum::routing::get(phase2_api::get_rate_limit_metrics),
+        )
+        // Task 17: ACP
+        .route(
+            "/ui/api/acp/agents",
+            axum::routing::get(phase2_api::get_acp_agents)
+                .post(phase2_api::add_acp_agent),
+        )
+        .route(
+            "/ui/api/acp/agents/{id}",
+            axum::routing::delete(phase2_api::remove_acp_agent),
+        )
+        .route(
+            "/ui/api/acp/enabled",
+            axum::routing::get(phase2_api::get_acp_feature_enabled),
+        )
+        // Task 18: Health Monitor
+        .route(
+            "/ui/api/health/components",
+            axum::routing::get(phase2_api::get_health_components),
+        )
+        .route(
+            "/ui/api/health/events",
+            axum::routing::get(phase2_api::get_health_events),
+        )
+        .route(
+            "/ui/api/settings/health-monitor",
+            axum::routing::get(phase2_api::get_health_monitor_config)
+                .post(phase2_api::save_health_monitor_config),
+        )
+        // Task 19: Multi-User
+        .route(
+            "/ui/api/users/paired",
+            axum::routing::get(phase2_api::get_paired_users),
+        )
+        .route(
+            "/ui/api/users/{id}/unpair",
+            axum::routing::post(phase2_api::unpair_user),
+        )
+        .route(
+            "/ui/api/users/{id}/heartbeat",
+            axum::routing::post(phase2_api::update_user_heartbeat),
+        )
+        .route(
+            "/ui/api/users/groups",
+            axum::routing::get(phase2_api::get_group_assignments)
+                .post(phase2_api::save_group_assignment),
+        )
+        // Task 20: Config Encryption
+        .route(
+            "/ui/api/encryption/status",
+            axum::routing::get(phase2_api::get_encryption_status),
+        )
+        .route(
+            "/ui/api/encryption/sensitive-fields",
+            axum::routing::get(phase2_api::get_sensitive_fields),
+        )
+        .route(
+            "/ui/api/encryption/encrypt-all",
+            axum::routing::post(phase2_api::encrypt_all),
+        )
+        .route(
+            "/ui/api/encryption/key-path",
+            axum::routing::post(phase2_api::save_encryption_key_path),
+        )
+        // Task 21: Log Rotation
+        .route(
+            "/ui/api/settings/log-rotation",
+            axum::routing::get(phase2_api::get_log_rotation_config)
+                .post(phase2_api::save_log_rotation_config),
+        )
+        .route(
+            "/ui/api/logs/storage",
+            axum::routing::get(phase2_api::get_log_storage_metrics),
+        )
+        .route(
+            "/ui/api/logs/files",
+            axum::routing::get(phase2_api::get_log_files),
+        )
+        .route(
+            "/ui/api/logs/files/{filename}",
+            axum::routing::get(phase2_api::download_log_file),
+        )
+        .route(
+            "/ui/api/logs/clear-old",
+            axum::routing::post(phase2_api::clear_old_logs),
+        )
+        // Task 22: Deployment / System Info
+        .route(
+            "/ui/api/system/info",
+            axum::routing::get(phase2_api::get_system_info),
+        )
+        .route(
+            "/ui/api/system/restart-status",
+            axum::routing::get(phase2_api::get_restart_status),
+        )
+        .route(
+            "/ui/api/system/restart",
+            axum::routing::post(phase2_api::trigger_restart),
+        )
+        // Coding Agent Management (Task 16)
+        .route(
+            "/ui/api/coding-agents",
+            axum::routing::get(coding_agents::list_coding_agents)
+                .post(coding_agents::register_coding_agent),
+        )
+        .route(
+            "/ui/api/coding-agents/{id}",
+            axum::routing::get(coding_agents::get_coding_agent)
+                .delete(coding_agents::unregister_coding_agent),
+        )
+        .route(
+            "/ui/api/coding-agents/{id}/tasks",
+            axum::routing::get(coding_agents::get_agent_tasks)
+                .post(coding_agents::delegate_task),
+        )
+        .route(
+            "/ui/api/coding-agents/{id}/tasks/{task_id}",
+            axum::routing::get(coding_agents::get_agent_task_detail),
+        )
+        .route(
+            "/ui/api/coding-agents/{id}/tasks/{task_id}/cancel",
+            axum::routing::post(coding_agents::cancel_task),
+        )
+        .route(
+            "/ui/api/coding-agents/{id}/costs",
+            axum::routing::get(coding_agents::get_agent_costs),
+        )
+        .route(
+            "/ui/api/coding-agents/{id}/config",
+            axum::routing::put(coding_agents::update_agent_config),
+        )
+        // Coding Agent Onboarding Wizard API
+        .route(
+            "/ui/api/coding-agents/backends",
+            axum::routing::get(onboarding::list_backends),
+        )
+        .route(
+            "/ui/api/coding-agents/onboarding/check-install",
+            axum::routing::post(onboarding::check_install),
+        )
+        .route(
+            "/ui/api/coding-agents/onboarding/run-install",
+            axum::routing::post(onboarding::run_install),
+        )
+        .route(
+            "/ui/api/coding-agents/onboarding/validate-auth",
+            axum::routing::post(onboarding::validate_auth),
+        )
+        .route(
+            "/ui/api/coding-agents/onboarding/complete",
+            axum::routing::post(onboarding::onboarding_complete),
         )
         // Auth guard middleware — uses the router's own Arc<ControlPanelState>
         .route_layer(axum::middleware::from_fn_with_state(

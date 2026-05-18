@@ -160,12 +160,18 @@ fn e2e_config_validation() {
             schedule: "every 1h".into(),
             message: "a".into(),
             deliver_to: None,
+            suppress_keyword: None,
+            target: None,
+            workspace: None,
         },
         CronJob {
             id: "dup".into(),
             schedule: "every 2h".into(),
             message: "b".into(),
             deliver_to: None,
+            suppress_keyword: None,
+            target: None,
+            workspace: None,
         },
     ];
     assert!(validate_config(&invalid).is_err());
@@ -177,6 +183,9 @@ fn e2e_config_validation() {
         schedule: "every 1h".into(),
         message: "hi".into(),
         deliver_to: None,
+        suppress_keyword: None,
+        target: None,
+        workspace: None,
     }];
     let diff = ConfigDiff::compute(&GatewayConfig::default(), &changed);
     assert!(diff.has_changes());
@@ -464,12 +473,18 @@ async fn e2e_cron_lifecycle() {
             channel: "telegram".into(),
             target: "@admin".into(),
         }),
+        suppress_keyword: None,
+        target: None,
+        workspace: None,
     };
     let job2 = CronJob {
         id: "hourly-check".into(),
         schedule: "every 1h".into(),
         message: "System health check".into(),
         deliver_to: None,
+        suppress_keyword: None,
+        target: None,
+        workspace: None,
     };
 
     scheduler.schedule(job1.clone()).unwrap();
@@ -488,6 +503,9 @@ async fn e2e_cron_lifecycle() {
         schedule: "0 0 * * 1".into(),
         message: "ask: Weekly summary".into(),
         deliver_to: None,
+        suppress_keyword: None,
+        target: None,
+        workspace: None,
     };
     scheduler.reconcile(&[job3]);
     assert_eq!(scheduler.job_count(), 1);
@@ -520,6 +538,9 @@ fn e2e_cron_inbound_message_construction() {
             channel: "slack".into(),
             target: "#general".into(),
         }),
+        suppress_keyword: None,
+        target: None,
+        workspace: None,
     };
 
     let msg = CronScheduler::build_inbound_message(&job);

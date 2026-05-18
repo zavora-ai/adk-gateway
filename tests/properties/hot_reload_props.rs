@@ -45,12 +45,18 @@ proptest! {
                 schedule: "* * * * *".into(),
                 message: "a".into(),
                 deliver_to: None,
+                suppress_keyword: None,
+                target: None,
+                workspace: None,
             },
             CronJob {
                 id: id.clone(),
                 schedule: "0 * * * *".into(),
                 message: "b".into(),
                 deliver_to: None,
+                suppress_keyword: None,
+                target: None,
+                workspace: None,
             },
         ];
         prop_assert!(validate_config(&config).is_err());
@@ -68,6 +74,9 @@ proptest! {
             schedule: "* * * * *".into(),
             message: "test".into(),
             deliver_to: None,
+            suppress_keyword: None,
+            target: None,
+            workspace: None,
         });
 
         let diff = ConfigDiff::compute(&old, &new);
@@ -128,6 +137,9 @@ proptest! {
                     schedule: "* * * * *".into(),
                     message: "hello".into(),
                     deliver_to: None,
+                    suppress_keyword: None,
+                    target: None,
+                    workspace: None,
                 });
             }
             4 => {

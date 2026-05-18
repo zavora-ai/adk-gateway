@@ -1,0 +1,133 @@
+# =============================================================================
+# adk-gateway.service — Systemd unit file for adk-gateway
+# =============================================================================
+# Install: sudo cp adk-gateway.service /etc/systemd/system/
+# Enable:  sudo systemctl enable adk-gateway
+# Start:   sudo systemctl start adk-gateway
+# Status:  sudo systemctl status adk-gateway
+# Logs:    journalctl -u adk-gateway -f
+#
+# This service uses Type=notify for readiness signaling:
+# The gateway sends sd_notify(READY=1) after initialization is complete
+# and it is accepting connections.
+# =============================================================================
+
+[Unit]
+Description=ADK Gateway — Multi-channel AI gateway for adk-rust agents
+Documentation=https://github.com/zavora-ai/adk-gateway
+After=network-online.target
+Wants=network-online.target
+
+# Optional dependencies (uncomment if using these services)
+# After=postgresql.service redis.service
+# Wants=postgresql.service redis.service
+
+[Service]
+# ─── Service Type ───────────────────────────────────────────────────────────
+# Type=notify: the service signals readiness via sd_notify(READY=1)
+# The gateway calls sd_notify after binding to the port and completing init.
+Type=notify
+
+# Notify timeout: how long systemd waits for READY=1 before considering
+# the service failed to start (default: 90s, generous for cold starts)
+TimeoutStartSec=90
+
+# ─── Execution ──────────────────────────────────────────────────────────────
+# Run as a dedicated service user (create with: useradd -r -s /sbin/nologin adk-gateway)
+User=adk-gateway
+Group=adk-gateway
+
+# Working directory for relative path resolution
+WorkingDirectory=/opt/adk-gateway
+
+# Binary path and arguments
+ExecStart=/usr/local/bin/adk-gateway --config /etc/adk-gateway/openclaw.json
+
+# ─── Graceful Shutdown ──────────────────────────────────────────────────────
+# Send SIGTERM for graceful shutdown (drain in-flight requests)
+KillSignal=SIGTERM
+
+# How long to wait for graceful shutdown before SIGKILL
+# Should match or exceed the configured drain timeout (default: 30s)
+# Adding 5s buffer for cleanup after drain completes
+TimeoutStopSec=35
+
+# Send SIGTERM to the main process only (not child processes)
+KillMode=mixed
+
+# ─── Automatic Restart on Failure ───────────────────────────────────────────
+# Restart the service if it exits with a non-zero code or is killed by signal
+Restart=on-failure
+
+# Wait 5 seconds before restarting to avoid rapid restart loops
+RestartSec=5
+
+# Maximum restart attempts within a 60-second window (prevents infinite loops)
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# ─── Resource Limits ────────────────────────────────────────────────────────
+# Memory limit: prevent runaway memory usage from crashing the host
+# Adjust based on expected workload (512M is conservative for most deployments)
+MemoryMax=512M
+MemoryHigh=384M
+
+# File descriptor limit: needed for many concurrent connections + MCP servers
+LimitNOFILE=65536
+
+# Process limit: prevent fork bombs from plugins/MCP servers
+LimitNPROC=512
+
+# Core dump size (0 = disabled in production, set to "infinity" for debugging)
+LimitCORE=0
+
+# CPU quota: optional, uncomment to limit CPU usage (100% = 1 core)
+# CPUQuota=200%
+
+# ─── Security Hardening ─────────────────────────────────────────────────────
+# Restrict filesystem access
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/adk-gateway /var/lib/adk-gateway /etc/adk-gateway
+
+# Restrict kernel capabilities
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# Private /tmp for isolation
+PrivateTmp=true
+
+# Restrict address families to IPv4/IPv6 and Unix sockets
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Restrict system calls to a safe subset
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# ─── Environment ────────────────────────────────────────────────────────────
+# Configuration file path
+Environment=ADK_CONFIG_PATH=/etc/adk-gateway/openclaw.json
+
+# Log format: json (structured, default) or pretty (human-readable)
+Environment=LOG_FORMAT=json
+
+# Graceful shutdown drain timeout (seconds)
+Environment=ADK_DRAIN_TIMEOUT_SECS=30
+
+# Rust log level (override with RUST_LOG for more granular control)
+Environment=RUST_LOG=adk_gateway=info,tower_http=info
+
+# Load additional environment from file (for secrets like API keys)
+EnvironmentFile=-/etc/adk-gateway/environment
+
+# ─── Logging ────────────────────────────────────────────────────────────────
+# Direct stdout/stderr to the journal for structured logging
+StandardOutput=journal
+StandardError=journal
+
+# Syslog identifier for filtering: journalctl -t adk-gateway
+SyslogIdentifier=adk-gateway
+
+[Install]
+# Start on multi-user boot (standard for network services)
+WantedBy=multi-user.target

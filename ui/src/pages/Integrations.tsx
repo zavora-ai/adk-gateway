@@ -1,7 +1,7 @@
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import StatusBadge from '../components/StatusBadge';
-import type { McpServerInfo, CronJobInfo, ToolInfo } from '../types';
+import type { McpServerInfo, CronJobInfo, ToolInfo, AcpAgentInfo, AcpAgentForm } from '../types';
 import { useState } from 'react';
 import AlertBanner from '../components/AlertBanner';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -470,6 +470,174 @@ export default function Integrations() {
       <div className="text-center py-8 text-gray-400 bg-white rounded-xl shadow-sm">
         No plugins installed
       </div>
+
+      {/* ACP Agents (Task 17) */}
+      <AcpAgentsSection />
+    </div>
+  );
+}
+
+// ── ACP Agents Section (Task 17) ──────────────────────────────────
+
+function AcpAgentsSection() {
+  const { data: acpFeature } = useApi<{ enabled: boolean }>(() => api.getAcpFeatureEnabled(), []);
+  const { data: acpAgents, refetch } = useApi<AcpAgentInfo[]>(() => api.getAcpAgents(), []);
+  const [showForm, setShowForm] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [form, setForm] = useState<AcpAgentForm>({
+    name: '',
+    command: '',
+    working_directory: '',
+    auto_approve: false,
+    timeout_secs: 300,
+  });
+
+  // Only show if ACP feature is enabled
+  if (!acpFeature?.enabled) return null;
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.command) return;
+    await api.addAcpAgent(form);
+    setForm({ name: '', command: '', working_directory: '', auto_approve: false, timeout_secs: 300 });
+    setShowForm(false);
+    refetch();
+  };
+
+  const handleRemove = async (name: string) => {
+    await api.removeAcpAgent(name);
+    setConfirmRemove(null);
+    refetch();
+  };
+
+  return (
+    <div className="mt-8">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-lg font-semibold">ACP Agents</h3>
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="px-3 py-1.5 text-xs font-medium text-[var(--color-accent)] bg-blue-50 rounded-lg hover:bg-blue-100"
+        >
+          {showForm ? 'Cancel' : '+ Add ACP Agent'}
+        </button>
+      </div>
+
+      {confirmRemove && (
+        <ConfirmDialog
+          title="Remove ACP Agent"
+          message={`Are you sure you want to remove ACP agent '${confirmRemove}'?`}
+          onConfirm={() => handleRemove(confirmRemove)}
+          onCancel={() => setConfirmRemove(null)}
+          destructive
+        />
+      )}
+
+      {/* Add form */}
+      {showForm && (
+        <form onSubmit={handleAdd} className="bg-white rounded-xl shadow-sm p-5 mb-4 space-y-3">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+              <input
+                type="text"
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. claude-code"
+                required
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Command</label>
+              <input
+                type="text"
+                value={form.command}
+                onChange={(e) => setForm({ ...form, command: e.target.value })}
+                placeholder="e.g. claude-code"
+                required
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Working Directory</label>
+              <input
+                type="text"
+                value={form.working_directory}
+                onChange={(e) => setForm({ ...form, working_directory: e.target.value })}
+                placeholder="/path/to/project"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Timeout (seconds)</label>
+              <input
+                type="number"
+                min="30"
+                max="3600"
+                value={form.timeout_secs}
+                onChange={(e) => setForm({ ...form, timeout_secs: parseInt(e.target.value, 10) || 300 })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-[var(--color-accent)]"
+              />
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={form.auto_approve}
+                onChange={(e) => setForm({ ...form, auto_approve: e.target.checked })}
+                className="rounded border-gray-300"
+              />
+              Auto-approve tool calls
+            </label>
+            <button
+              type="submit"
+              className="px-4 py-2 text-sm font-medium bg-[var(--color-accent)] text-white rounded-lg hover:bg-[var(--color-accent-hover)]"
+            >
+              Add Agent
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* ACP Agents Table */}
+      {acpAgents && acpAgents.length > 0 ? (
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-gray-50">
+                <th className="text-left px-4 py-3 text-xs uppercase tracking-wide text-gray-500">Name</th>
+                <th className="text-left px-4 py-3 text-xs uppercase tracking-wide text-gray-500">Command</th>
+                <th className="text-left px-4 py-3 text-xs uppercase tracking-wide text-gray-500">Status</th>
+                <th className="text-left px-4 py-3 text-xs uppercase tracking-wide text-gray-500">Timeout</th>
+                <th className="text-left px-4 py-3 text-xs uppercase tracking-wide text-gray-500">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {acpAgents.map((agent) => (
+                <tr key={agent.name} className="border-t border-gray-100 hover:bg-gray-50">
+                  <td className="px-4 py-3 text-sm font-medium">{agent.name}</td>
+                  <td className="px-4 py-3 text-sm font-mono text-gray-600">{agent.command}</td>
+                  <td className="px-4 py-3"><StatusBadge status={agent.status} /></td>
+                  <td className="px-4 py-3 text-sm text-gray-500">{agent.timeout_secs}s</td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => setConfirmRemove(agent.name)}
+                      className="px-3 py-1 text-xs font-medium text-red-700 bg-red-50 rounded-lg hover:bg-red-100"
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="text-center py-8 text-gray-400 bg-white rounded-xl shadow-sm">
+          No ACP agents configured
+        </div>
+      )}
     </div>
   );
 }

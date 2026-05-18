@@ -1,6 +1,27 @@
-import type { ApiResponse } from '../types';
+import type {
+  ApiResponse,
+  CodingAgentSummary,
+  CodingAgentDetail,
+  AgentRegistrationPayload,
+  AgentConfigUpdate,
+  PaginatedResponse,
+  TaskHistoryEntry,
+  TaskDetail,
+  TaskDelegationPayload,
+  AgentCostStats,
+  CodingAgentBackend,
+  CliVerificationResult,
+} from '../types';
 
 const BASE = '/ui/api';
+
+/** Normalize a backend status value to a valid CodingAgentConnectionStatus. */
+function normalizeStatus(status: unknown): 'connected' | 'disconnected' | 'error' {
+  const s = String(status ?? '').toLowerCase();
+  if (s === 'connected' || s === 'running' || s === 'active') return 'connected';
+  if (s === 'error' || s === 'failed') return 'error';
+  return 'disconnected';
+}
 
 /** Typed fetch wrapper for the gateway JSON API. */
 async function request<T>(
@@ -128,4 +149,208 @@ export const api = {
     request<void>('/delegation', { method: 'POST', body: JSON.stringify({ caller_id, target_id }) }),
   delegationRemove: (caller_id: string, target_id: string) =>
     request<void>('/delegation', { method: 'DELETE', body: JSON.stringify({ caller_id, target_id }) }),
+
+  // --- Phase 2 Endpoints ---
+
+  // Tool Approval (Task 14)
+  pendingApprovals: () => request<import('../types').PendingApproval[]>('/approvals/pending'),
+  approvalHistory: () => request<import('../types').ApprovalHistoryEntry[]>('/approvals/history'),
+  approveRequest: (id: string) => request<void>(`/approvals/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
+  rejectRequest: (id: string) => request<void>(`/approvals/${encodeURIComponent(id)}/reject`, { method: 'POST' }),
+  getApprovalConfig: () => request<import('../types').ApprovalConfig>('/approvals/config'),
+  saveApprovalConfig: (config: import('../types').ApprovalConfig) =>
+    request<void>('/approvals/config', { method: 'POST', body: JSON.stringify(config) }),
+
+  // Stale Context (Task 15)
+  getStaleContextConfig: () => request<import('../types').StaleContextConfig>('/settings/stale-context'),
+  saveStaleContextConfig: (config: import('../types').StaleContextConfig) =>
+    request<void>('/settings/stale-context', { method: 'POST', body: JSON.stringify(config) }),
+  getUserActivities: () => request<import('../types').UserActivity[]>('/users/activity'),
+
+  // Rate Limiter (Task 16)
+  getRateLimitConfig: () => request<import('../types').RateLimitConfig>('/settings/rate-limit'),
+  saveRateLimitConfig: (config: import('../types').RateLimitConfig) =>
+    request<void>('/settings/rate-limit', { method: 'POST', body: JSON.stringify(config) }),
+  getRateLimitMetrics: () => request<import('../types').RateLimitMetrics>('/metrics/rate-limit'),
+
+  // ACP Integration (Task 17)
+  getAcpAgents: () => request<import('../types').AcpAgentInfo[]>('/integrations/acp'),
+  addAcpAgent: (agent: import('../types').AcpAgentForm) =>
+    request<void>('/integrations/acp', { method: 'POST', body: JSON.stringify(agent) }),
+  removeAcpAgent: (name: string) =>
+    request<void>(`/integrations/acp/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  getAcpFeatureEnabled: () => request<{ enabled: boolean }>('/integrations/acp/status'),
+
+  // Health Monitor (Task 18)
+  getHealthComponents: () => request<import('../types').HealthComponent[]>('/health/components'),
+  getHealthEvents: () => request<import('../types').HealthEvent[]>('/health/events'),
+  getHealthMonitorConfig: () => request<import('../types').HealthMonitorConfig>('/settings/health-monitor'),
+  saveHealthMonitorConfig: (config: import('../types').HealthMonitorConfig) =>
+    request<void>('/settings/health-monitor', { method: 'POST', body: JSON.stringify(config) }),
+
+  // Multi-User (Task 19)
+  getPairedUsers: () => request<import('../types').PairedUser[]>('/users/paired'),
+  unpairUser: (userId: string) =>
+    request<void>(`/users/paired/${encodeURIComponent(userId)}/unpair`, { method: 'POST' }),
+  updateUserHeartbeat: (userId: string, config: { enabled: boolean; interval_secs?: number }) =>
+    request<void>(`/users/paired/${encodeURIComponent(userId)}/heartbeat`, { method: 'POST', body: JSON.stringify(config) }),
+  getGroupAssignments: () => request<import('../types').GroupChatAssignment[]>('/users/groups'),
+  saveGroupAssignment: (assignment: import('../types').GroupChatAssignment) =>
+    request<void>('/users/groups', { method: 'POST', body: JSON.stringify(assignment) }),
+
+  // Config Encryption (Task 20)
+  getEncryptionStatus: () => request<import('../types').EncryptionStatus>('/settings/encryption/status'),
+  getSensitiveFields: () => request<import('../types').SensitiveField[]>('/settings/encryption/fields'),
+  encryptAll: () => request<void>('/settings/encryption/encrypt-all', { method: 'POST' }),
+  saveEncryptionKeyPath: (path: string) =>
+    request<void>('/settings/encryption/key-path', { method: 'POST', body: JSON.stringify({ path }) }),
+
+  // Log Rotation (Task 21)
+  getLogRotationConfig: () => request<import('../types').LogRotationConfig>('/settings/log-rotation'),
+  saveLogRotationConfig: (config: import('../types').LogRotationConfig) =>
+    request<void>('/settings/log-rotation', { method: 'POST', body: JSON.stringify(config) }),
+  getLogStorageMetrics: () => request<import('../types').LogStorageMetrics>('/metrics/log-storage'),
+  getLogFiles: () => request<import('../types').LogFileInfo[]>('/logs/files'),
+  downloadLogFile: (filename: string) => `${BASE}/logs/files/${encodeURIComponent(filename)}/download`,
+  clearOldLogs: () => request<void>('/logs/clear-old', { method: 'POST' }),
+
+  // Deployment Status (Task 22)
+  getSystemInfo: () => request<import('../types').SystemInfo>('/system/info'),
+  getRestartStatus: () => request<import('../types').RestartStatus>('/system/restart/status'),
+  triggerRestart: () => request<void>('/system/restart', { method: 'POST' }),
+
+  // --- Coding Agents ---
+  codingAgents: async (): Promise<ApiResponse<CodingAgentSummary[]>> => {
+    const res = await request<unknown>('/coding-agents');
+    const raw = res as unknown as { ok: boolean; data?: Array<Record<string, unknown>>; message?: string };
+    if (raw.ok && raw.data) {
+      // Normalize backend response to match CodingAgentSummary interface
+      const agents: CodingAgentSummary[] = raw.data.map((a) => ({
+        id: (a.id as string) ?? '',
+        alias: (a.alias as string) ?? null,
+        backend_type: (a.backendType as string) ?? (a.backend_type as string) ?? '',
+        display_name: (a.displayName as string) ?? (a.display_name as string) ?? (a.backendType as string) ?? '',
+        connection_status: normalizeStatus(a.status),
+        last_task_at: (a.lastSuccessfulTask as string) ?? (a.last_task_at as string) ?? null,
+        workspaces: (a.workspaces as string[]) ?? [],
+      }));
+      return { ok: true, data: agents };
+    }
+    return { ok: false, message: raw.message || 'Failed to load agents' };
+  },
+  codingAgent: async (id: string): Promise<ApiResponse<CodingAgentDetail>> => {
+    const res = await request<unknown>(`/coding-agents/${encodeURIComponent(id)}`);
+    const raw = res as unknown as { ok: boolean; data?: Record<string, unknown>; message?: string };
+    if (raw.ok && raw.data) {
+      const a = raw.data;
+      const detail: CodingAgentDetail = {
+        id: (a.id as string) ?? '',
+        alias: (a.alias as string) ?? null,
+        backend_type: (a.backendType as string) ?? (a.backend_type as string) ?? '',
+        display_name: (a.displayName as string) ?? (a.display_name as string) ?? (a.backendType as string) ?? '',
+        connection_status: normalizeStatus(a.status),
+        last_task_at: (a.lastSuccessfulTask as string) ?? (a.last_task_at as string) ?? null,
+        workspaces: (a.workspaces as string[]) ?? [],
+        endpoint: (a.endpoint as string) ?? '',
+        timeout_secs: (a.timeoutSecs as number) ?? (a.timeout_secs as number) ?? 1800,
+        cost_cap_usd: (a.costCapUsd as number | null) ?? (a.cost_cap_usd as number | null) ?? null,
+        monthly_budget_usd: (a.monthlyBudgetUsd as number | null) ?? (a.monthly_budget_usd as number | null) ?? null,
+        capabilities: (a.capabilities as CodingAgentDetail['capabilities']) ?? { file_context: false, streaming_output: false, cost_reporting: false, cancellation: false },
+      };
+      return { ok: true, data: detail };
+    }
+    return { ok: false, message: raw.message || 'Failed to load agent' };
+  },
+  registerCodingAgent: async (payload: AgentRegistrationPayload): Promise<ApiResponse<CodingAgentSummary>> => {
+    // Transform to match backend's expected camelCase format with required 'id' field
+    const id = payload.alias || `${payload.backend_type}-${Date.now()}`;
+    const body = {
+      id,
+      backendType: payload.backend_type,
+      endpoint: payload.endpoint || `acp://${payload.backend_type}`,
+      workspaces: payload.workspaces,
+      timeoutSecs: payload.timeout_secs,
+      costCapUsd: payload.cost_cap_usd,
+      monthlyBudgetUsd: null,
+      alias: payload.alias || null,
+    };
+    return request<CodingAgentSummary>('/coding-agents', { method: 'POST', body: JSON.stringify(body) });
+  },
+  updateCodingAgent: (id: string, config: AgentConfigUpdate) =>
+    request<void>(`/coding-agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(config) }),
+  deleteCodingAgent: (id: string) =>
+    request<void>(`/coding-agents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // Coding Agent Tasks
+  codingAgentTasks: async (agentId: string, page?: number, pageSize?: number): Promise<ApiResponse<PaginatedResponse<TaskHistoryEntry>>> => {
+    const p = page ?? 1;
+    const ps = pageSize ?? 20;
+    const res = await request<unknown>(
+      `/coding-agents/${encodeURIComponent(agentId)}/tasks?page=${p}&page_size=${ps}`
+    );
+    const raw = res as unknown as { ok: boolean; data?: unknown; items?: unknown[]; total?: number; message?: string };
+    if (raw.ok) {
+      // Backend may return { ok, data: [] } or { ok, data: { items, total, page, page_size } }
+      let items: TaskHistoryEntry[] = [];
+      let total = 0;
+      if (Array.isArray(raw.data)) {
+        items = raw.data as TaskHistoryEntry[];
+        total = items.length;
+      } else if (raw.data && typeof raw.data === 'object') {
+        const d = raw.data as Record<string, unknown>;
+        items = (d.items as TaskHistoryEntry[]) ?? [];
+        total = (d.total as number) ?? items.length;
+      } else if (Array.isArray(raw.items)) {
+        items = raw.items as TaskHistoryEntry[];
+        total = (raw.total as number) ?? items.length;
+      }
+      return { ok: true, data: { items, total, page: p, page_size: ps } };
+    }
+    return { ok: false, message: raw.message || 'Failed to load tasks' };
+  },
+  codingAgentTask: (agentId: string, taskId: string) =>
+    request<TaskDetail>(`/coding-agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}`),
+  delegateTask: (agentId: string, payload: TaskDelegationPayload) =>
+    request<{ task_id: string }>(`/coding-agents/${encodeURIComponent(agentId)}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  // Coding Agent Cost
+  codingAgentCosts: (agentId: string) =>
+    request<AgentCostStats>(`/coding-agents/${encodeURIComponent(agentId)}/costs`),
+
+  // Coding Agent Onboarding
+  codingAgentBackends: async (): Promise<ApiResponse<CodingAgentBackend[]>> => {
+    const res = await request<unknown>('/coding-agents/backends');
+    const raw = res as unknown as { ok: boolean; backends?: CodingAgentBackend[]; data?: CodingAgentBackend[]; message?: string };
+    if (raw.ok && raw.backends) {
+      return { ok: true, data: raw.backends };
+    }
+    if (raw.ok && raw.data) {
+      return { ok: true, data: raw.data as CodingAgentBackend[] };
+    }
+    return { ok: false, message: raw.message || 'Failed to load backends' };
+  },
+  verifyCli: async (backendType: string): Promise<ApiResponse<CliVerificationResult>> => {
+    const res = await request<unknown>('/coding-agents/onboarding/check-install', {
+      method: 'POST',
+      body: JSON.stringify({ agent_type: backendType }),
+    });
+    const raw = res as unknown as { ok: boolean; installed?: boolean; version?: string | null; path?: string | null; message?: string };
+    if (raw.ok && raw.installed !== undefined) {
+      return { ok: true, data: { installed: raw.installed, version: raw.version ?? null, path: raw.path ?? null } };
+    }
+    return { ok: false, message: raw.message || 'Verification failed' };
+  },
+  listDirectories: async (): Promise<ApiResponse<string[]>> => {
+    // The backend doesn't have a directory listing endpoint.
+    // Return common workspace paths as suggestions.
+    const home = '/Users/' + (window.location.pathname.split('/')[1] || 'user');
+    return { ok: true, data: [
+      home + '/Developer/projects',
+      home + '/Documents',
+      '/tmp',
+    ]};
+  },
 };

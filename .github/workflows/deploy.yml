@@ -1,0 +1,64 @@
+# =============================================================================
+# CI/CD Pipeline — Build and deploy adk-gateway to local Mac
+# =============================================================================
+# Triggers on push to main branch.
+# Runs on a self-hosted macOS runner with access to both adk-gateway and adk-rust repos.
+# Uses launchd for service management.
+# =============================================================================
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-and-deploy:
+    runs-on: [self-hosted, macOS]
+
+    steps:
+      - name: Checkout adk-gateway
+        uses: actions/checkout@v4
+        with:
+          path: adk-gateway
+
+      - name: Checkout adk-rust (sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: zavora-ai/adk-rust
+          path: adk-rust
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85.0"
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            adk-gateway/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('adk-gateway/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run tests
+        working-directory: adk-gateway
+        run: cargo test --lib
+
+      - name: Build release binary
+        working-directory: adk-gateway
+        run: cargo build --release
+
+      - name: Deploy to local machine
+        working-directory: adk-gateway
+        run: |
+          chmod +x scripts/deploy-local.sh
+          ./scripts/deploy-local.sh

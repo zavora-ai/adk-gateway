@@ -159,6 +159,18 @@ impl SessionBridge {
     pub fn active_sessions(&self) -> Vec<SessionInfo> {
         self.sessions.iter().map(|e| e.value().clone()).collect()
     }
+
+    /// Get the last activity timestamp for a given message's session.
+    ///
+    /// Returns `None` if no session exists yet (first message from this user).
+    /// Used by the stale context detector to determine idle duration.
+    pub fn get_last_activity(
+        &self,
+        msg: &InboundMessage,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let key = self.session_key(msg);
+        self.sessions.get(&key).map(|entry| entry.last_activity)
+    }
 }
 
 use chrono::Timelike;

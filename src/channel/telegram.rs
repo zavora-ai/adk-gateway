@@ -1,9 +1,24 @@
 //! Telegram channel implementation using the Bot API via teloxide.
+//!
+//! Supports inline keyboard buttons for tool approval flow (Task 14):
+//! - Sending messages with inline keyboard markup (✅ Approve / ❌ Reject)
+//! - Handling callback queries from inline button presses
+//! - Updating messages to reflect approval/rejection/timeout status
+//!
+//! Supports coding agent delegation commands (Task 13):
+//! - Parsing "delegate to {agent}: {task}" messages
+//! - Routing tasks to the appropriate coding agent via TaskDelegator
+//! - Handling /stop command to cancel in-progress coding agent tasks
 
 use super::{Channel, ChannelType, EditMessage, InboundMessage, OutboundMessage};
+use crate::coding_agent::delegator::{DelegationCommand, TaskDelegator};
+use crate::coding_agent::error::CodingAgentError;
+use crate::coding_agent::models::{ReplyTarget, TaskRequest, TaskTrigger};
 use crate::config::TelegramConfig;
 use crate::reconnect::{ReconnectPolicy, ReconnectState};
 use async_trait::async_trait;
+use dashmap::DashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 
@@ -18,6 +33,17 @@ pub enum ProbeResult {
     Unreachable { timeout_ms: u64 },
     /// An unexpected error occurred.
     Error { message: String },
+}
+
+/// Status for updating an approval message after user action or timeout.
+#[derive(Debug, Clone)]
+pub enum ApprovalMessageStatus {
+    /// User approved the tool call.
+    Approved { timestamp: String },
+    /// User rejected the tool call.
+    Rejected { timestamp: String },
+    /// Approval timed out (auto-rejected).
+    TimedOut,
 }
 
 pub struct TelegramChannel {
@@ -95,6 +121,451 @@ impl TelegramChannel {
             Err(_) => ProbeResult::Unreachable { timeout_ms },
         }
     }
+
+    // ── Inline Keyboard Support (Tool Approval - Task 14) ──────────
+
+    /// Send a message with an inline keyboard for tool approval.
+    ///
+    /// The message displays the tool name, arguments summary, and a
+    /// "⏳ Waiting for approval..." status. Two inline buttons are attached:
+    /// ✅ Approve and ❌ Reject.
+    ///
+    /// Returns the platform message ID of the sent message.
+    pub async fn send_approval_request(
+        &self,
+        chat_id: &str,
+        approval_id: &str,
+        tool_name: &str,
+        tool_args: &serde_json::Value,
+    ) -> anyhow::Result<String> {
+        let message_text = crate::tool_approval::build_approval_message(tool_name, tool_args);
+        let keyboard = crate::tool_approval::build_approval_keyboard(approval_id);
+
+        let bot = self.bot.lock().await;
+        let bot = bot
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("telegram bot not initialized"))?;
+
+        let id: i64 = chat_id.parse()?;
+        let url = format!(
+            "https://api.telegram.org/bot{}/sendMessage",
+            self.config.bot_token
+        );
+
+        let payload = serde_json::json!({
+            "chat_id": id,
+            "text": message_text,
+            "parse_mode": "Markdown",
+            "reply_markup": keyboard,
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client.post(&url).json(&payload).send().await?;
+        let body: serde_json::Value = resp.json().await?;
+
+        let message_id = body["result"]["message_id"]
+            .as_i64()
+            .ok_or_else(|| anyhow::anyhow!("failed to get message_id from response"))?;
+
+        tracing::info!(
+            chat_id = %chat_id,
+            approval_id = %approval_id,
+            tool_name = %tool_name,
+            message_id = message_id,
+            "Sent tool approval request with inline keyboard"
+        );
+
+        // Suppress unused variable warning for bot reference
+        let _ = bot;
+
+        Ok(message_id.to_string())
+    }
+
+    /// Update an approval message after the user responds or timeout occurs.
+    ///
+    /// Replaces the inline keyboard with a status message:
+    /// - "✅ Approved" with timestamp on approve
+    /// - "❌ Rejected" with timestamp on reject
+    /// - "⏰ Timed out (auto-rejected)" on timeout
+    pub async fn update_approval_message(
+        &self,
+        chat_id: &str,
+        message_id: &str,
+        tool_name: &str,
+        status: ApprovalMessageStatus,
+    ) -> anyhow::Result<()> {
+        let status_text = match status {
+            ApprovalMessageStatus::Approved { timestamp } => {
+                format!(
+                    "🔒 *Tool Approval*\n\nTool: `{}`\n\n✅ Approved at {}",
+                    tool_name, timestamp
+                )
+            }
+            ApprovalMessageStatus::Rejected { timestamp } => {
+                format!(
+                    "🔒 *Tool Approval*\n\nTool: `{}`\n\n❌ Rejected at {}",
+                    tool_name, timestamp
+                )
+            }
+            ApprovalMessageStatus::TimedOut => {
+                format!(
+                    "🔒 *Tool Approval*\n\nTool: `{}`\n\n⏰ Timed out (auto-rejected)",
+                    tool_name
+                )
+            }
+        };
+
+        let id: i64 = chat_id.parse()?;
+        let msg_id: i32 = message_id.parse()?;
+
+        let url = format!(
+            "https://api.telegram.org/bot{}/editMessageText",
+            self.config.bot_token
+        );
+
+        let payload = serde_json::json!({
+            "chat_id": id,
+            "message_id": msg_id,
+            "text": status_text,
+            "parse_mode": "Markdown",
+            // Remove inline keyboard by setting empty markup
+            "reply_markup": { "inline_keyboard": [] },
+        });
+
+        let client = reqwest::Client::new();
+        let _resp = client.post(&url).json(&payload).send().await?;
+
+        tracing::info!(
+            chat_id = %chat_id,
+            message_id = %message_id,
+            tool_name = %tool_name,
+            "Updated approval message status"
+        );
+
+        Ok(())
+    }
+
+    /// Answer a callback query from an inline button press.
+    ///
+    /// This acknowledges the button press to Telegram so the loading
+    /// indicator disappears for the user.
+    pub async fn answer_callback_query(
+        &self,
+        callback_query_id: &str,
+        text: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let url = format!(
+            "https://api.telegram.org/bot{}/answerCallbackQuery",
+            self.config.bot_token
+        );
+
+        let mut payload = serde_json::json!({
+            "callback_query_id": callback_query_id,
+        });
+
+        if let Some(t) = text {
+            payload["text"] = serde_json::Value::String(t.to_string());
+        }
+
+        let client = reqwest::Client::new();
+        let _resp = client.post(&url).json(&payload).send().await?;
+
+        Ok(())
+    }
+}
+
+// ── Coding Agent Delegation Handler (Task 13) ──────────────────────
+
+/// Result of attempting to handle a message as a delegation command.
+#[derive(Debug)]
+pub enum DelegationResult {
+    /// The message was handled as a delegation command.
+    Handled,
+    /// The message was not a delegation command; continue normal processing.
+    NotADelegationCommand,
+}
+
+/// Handles coding agent delegation commands from Telegram messages.
+///
+/// Integrates with the `TaskDelegator` to parse delegation commands,
+/// route tasks to coding agents, and send appropriate replies.
+/// Tracks the last task ID per chat to support the `/stop` command.
+pub struct TelegramDelegationHandler {
+    /// The task delegator for routing tasks to coding agents.
+    delegator: Arc<TaskDelegator>,
+    /// Tracks the last task ID per chat_id for /stop support.
+    last_task_per_chat: Arc<DashMap<String, String>>,
+}
+
+impl TelegramDelegationHandler {
+    /// Create a new delegation handler with the given task delegator.
+    pub fn new(delegator: Arc<TaskDelegator>) -> Self {
+        Self {
+            delegator,
+            last_task_per_chat: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Attempt to handle an inbound message as a delegation command.
+    ///
+    /// Returns `DelegationResult::Handled` if the message was a delegation command
+    /// (regardless of success/failure), or `DelegationResult::NotADelegationCommand`
+    /// if the message doesn't match the delegation pattern.
+    ///
+    /// On success, sends an acknowledgment message to the chat.
+    /// On failure, sends an appropriate error message.
+    pub async fn handle_delegation(
+        &self,
+        text: &str,
+        chat_id: &str,
+        sender_id: &str,
+        message_id: &str,
+        bot_token: &str,
+    ) -> DelegationResult {
+        // Try to parse as a delegation command
+        let command = match TaskDelegator::parse_delegation_command(text) {
+            Some(cmd) => cmd,
+            None => return DelegationResult::NotADelegationCommand,
+        };
+
+        let DelegationCommand {
+            agent_name,
+            task_description,
+        } = command;
+
+        // Build the task request
+        let task_request = TaskRequest {
+            description: task_description,
+            trigger: TaskTrigger::UserCommand {
+                user_id: sender_id.to_string(),
+                channel: "telegram".to_string(),
+            },
+            workspace: None,
+            file_context: None,
+            reply_to: ReplyTarget {
+                channel_type: "telegram".to_string(),
+                channel_id: chat_id.to_string(),
+                message_id: Some(message_id.to_string()),
+            },
+        };
+
+        // Attempt delegation
+        match self.delegator.delegate(&agent_name, task_request).await {
+            Ok(task_id) => {
+                // Track the task for /stop support
+                self.last_task_per_chat
+                    .insert(chat_id.to_string(), task_id.clone());
+
+                // Resolve display name for the acknowledgment message
+                let display_name = self.resolve_display_name(&agent_name);
+
+                let reply = format!("✅ Task queued for {display_name}");
+                let _ = send_telegram_message(bot_token, chat_id, &reply, Some(message_id)).await;
+
+                tracing::info!(
+                    chat_id = %chat_id,
+                    sender_id = %sender_id,
+                    agent = %agent_name,
+                    task_id = %task_id,
+                    "Delegation command handled successfully"
+                );
+            }
+            Err(CodingAgentError::AgentNotFound(_)) => {
+                let available = self.format_available_agents();
+                let reply = format!(
+                    "❌ Agent \"{}\" not found.\n\nAvailable agents:\n{}",
+                    agent_name, available
+                );
+                let _ = send_telegram_message(bot_token, chat_id, &reply, Some(message_id)).await;
+
+                tracing::warn!(
+                    chat_id = %chat_id,
+                    agent = %agent_name,
+                    "Delegation failed: agent not found"
+                );
+            }
+            Err(CodingAgentError::AgentDisconnected(ref agent_id)) => {
+                let reply = format!(
+                    "⚠️ Agent \"{}\" is currently unavailable. Please try again later.",
+                    agent_id
+                );
+                let _ = send_telegram_message(bot_token, chat_id, &reply, Some(message_id)).await;
+
+                tracing::warn!(
+                    chat_id = %chat_id,
+                    agent = %agent_name,
+                    "Delegation failed: agent disconnected"
+                );
+            }
+            Err(err) => {
+                let reply = format!("❌ Delegation failed: {}", err);
+                let _ = send_telegram_message(bot_token, chat_id, &reply, Some(message_id)).await;
+
+                tracing::error!(
+                    chat_id = %chat_id,
+                    agent = %agent_name,
+                    error = %err,
+                    "Delegation failed with unexpected error"
+                );
+            }
+        }
+
+        DelegationResult::Handled
+    }
+
+    /// Handle the `/stop` command to cancel in-progress coding agent tasks.
+    ///
+    /// Accepts either `/stop` (cancels the last task for this chat) or
+    /// `/stop {task_id}` (cancels a specific task by ID).
+    ///
+    /// Returns `true` if the command was handled as a coding agent stop,
+    /// `false` if there's no task to cancel (caller should fall through to
+    /// normal /stop handling).
+    pub async fn handle_stop(
+        &self,
+        text: &str,
+        chat_id: &str,
+        message_id: &str,
+        bot_token: &str,
+    ) -> bool {
+        let trimmed = text.trim();
+
+        // Extract task ID: either from the command argument or from last tracked task
+        let task_id = if trimmed.eq_ignore_ascii_case("/stop") {
+            // Use the last task for this chat
+            match self.last_task_per_chat.get(chat_id) {
+                Some(entry) => entry.value().clone(),
+                None => return false, // No tracked task, let normal /stop handle it
+            }
+        } else if trimmed.to_lowercase().starts_with("/stop ") {
+            // Extract task ID from argument
+            trimmed[6..].trim().to_string()
+        } else {
+            return false;
+        };
+
+        // Attempt cancellation
+        match self.delegator.cancel_task(&task_id).await {
+            Ok(()) => {
+                // Remove from tracking
+                self.last_task_per_chat.remove(chat_id);
+
+                let reply = format!("⏹ Task `{}` has been cancelled.", task_id);
+                let _ = send_telegram_message(bot_token, chat_id, &reply, Some(message_id)).await;
+
+                tracing::info!(
+                    chat_id = %chat_id,
+                    task_id = %task_id,
+                    "Coding agent task cancelled via /stop"
+                );
+                true
+            }
+            Err(err) => {
+                let reply = format!("❌ Could not cancel task: {}", err);
+                let _ = send_telegram_message(bot_token, chat_id, &reply, Some(message_id)).await;
+
+                tracing::warn!(
+                    chat_id = %chat_id,
+                    task_id = %task_id,
+                    error = %err,
+                    "Failed to cancel coding agent task"
+                );
+                true // Still handled — don't fall through to normal /stop
+            }
+        }
+    }
+
+    /// Resolve the display name for an agent (by ID or alias).
+    fn resolve_display_name(&self, agent_name: &str) -> String {
+        // Try to get the agent from registry to find its backend display name
+        let registry = self.delegator.registry();
+        if let Some(agent) = registry.get_agent(agent_name) {
+            // Try to get the backend definition for a nicer display name
+            if let Some(backend) = registry.get_backend(&agent.backend_type) {
+                return backend.display_name;
+            }
+            return agent.id;
+        }
+
+        // Try alias resolution
+        if let Some(resolved_id) = registry.resolve_by_alias(agent_name) {
+            if let Some(agent) = registry.get_agent(&resolved_id) {
+                if let Some(backend) = registry.get_backend(&agent.backend_type) {
+                    return backend.display_name;
+                }
+                return agent.id;
+            }
+        }
+
+        // Fallback to the name as provided
+        agent_name.to_string()
+    }
+
+    /// Format the list of available agents for error messages.
+    fn format_available_agents(&self) -> String {
+        let registry = self.delegator.registry();
+        let agents = registry.list_agents();
+
+        if agents.is_empty() {
+            return "  (no agents registered)".to_string();
+        }
+
+        agents
+            .iter()
+            .map(|agent| {
+                let alias_info = agent
+                    .config
+                    .alias
+                    .as_ref()
+                    .map(|a| format!(" (alias: {})", a))
+                    .unwrap_or_default();
+                format!("• {}{}", agent.id, alias_info)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// Send a plain text message via the Telegram Bot API.
+///
+/// This is a standalone helper used by the delegation handler to send
+/// replies without requiring a full `TelegramChannel` instance.
+async fn send_telegram_message(
+    bot_token: &str,
+    chat_id: &str,
+    text: &str,
+    reply_to_message_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let url = format!("https://api.telegram.org/bot{}/sendMessage", bot_token);
+
+    let mut payload = serde_json::json!({
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+    });
+
+    if let Some(reply_id) = reply_to_message_id {
+        if let Ok(msg_id) = reply_id.parse::<i64>() {
+            payload["reply_parameters"] = serde_json::json!({
+                "message_id": msg_id,
+            });
+        }
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client.post(&url).json(&payload).send().await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        tracing::warn!(
+            status = %status,
+            body = %body,
+            "Failed to send Telegram delegation reply"
+        );
+    }
+
+    Ok(())
 }
 
 #[async_trait]
@@ -404,5 +875,269 @@ impl Channel for TelegramChannel {
             let _ = tx.send(());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod delegation_tests {
+    use super::*;
+    use crate::coding_agent::config::CodingAgentInstanceConfig;
+    use crate::coding_agent::cost::CostTracker;
+    use crate::coding_agent::queue::TaskQueue;
+    use crate::coding_agent::registry::CodingAgentRegistry;
+    use crate::coding_agent::status::AgentConnectionStatus;
+    use std::path::PathBuf;
+
+    fn sample_agent_config(id: &str, alias: Option<&str>) -> CodingAgentInstanceConfig {
+        CodingAgentInstanceConfig {
+            id: id.to_string(),
+            backend_type: "claude-code".to_string(),
+            endpoint: format!("http://localhost:3000/{}", id),
+            workspaces: vec![PathBuf::from("/home/user/projects")],
+            timeout_secs: Some(900),
+            cost_cap_usd: Some(5.0),
+            monthly_budget_usd: None,
+            alias: alias.map(|a| a.to_string()),
+            auth: None,
+        }
+    }
+
+    fn make_handler_with_agents() -> TelegramDelegationHandler {
+        let registry = Arc::new(CodingAgentRegistry::new(16));
+        registry
+            .register_agent(sample_agent_config("claude-code-1", Some("cc")))
+            .unwrap();
+        registry
+            .update_status("claude-code-1", AgentConnectionStatus::Connected)
+            .unwrap();
+        registry
+            .register_agent(sample_agent_config("kiro-cli-1", Some("kiro")))
+            .unwrap();
+        registry
+            .update_status("kiro-cli-1", AgentConnectionStatus::Connected)
+            .unwrap();
+
+        let queue = TaskQueue::new(Some(3));
+        let cost_tracker = Arc::new(CostTracker::new());
+        let delegator = Arc::new(TaskDelegator::new(registry, queue, cost_tracker));
+
+        TelegramDelegationHandler::new(delegator)
+    }
+
+    fn make_handler_empty() -> TelegramDelegationHandler {
+        let registry = Arc::new(CodingAgentRegistry::new(16));
+        let queue = TaskQueue::new(Some(3));
+        let cost_tracker = Arc::new(CostTracker::new());
+        let delegator = Arc::new(TaskDelegator::new(registry, queue, cost_tracker));
+
+        TelegramDelegationHandler::new(delegator)
+    }
+
+    fn make_handler_with_disconnected_agent() -> TelegramDelegationHandler {
+        let registry = Arc::new(CodingAgentRegistry::new(16));
+        registry
+            .register_agent(sample_agent_config("claude-code-1", Some("cc")))
+            .unwrap();
+        registry
+            .update_status(
+                "claude-code-1",
+                AgentConnectionStatus::Disconnected {
+                    since: chrono::Utc::now(),
+                },
+            )
+            .unwrap();
+
+        let queue = TaskQueue::new(Some(3));
+        let cost_tracker = Arc::new(CostTracker::new());
+        let delegator = Arc::new(TaskDelegator::new(registry, queue, cost_tracker));
+
+        TelegramDelegationHandler::new(delegator)
+    }
+
+    #[tokio::test]
+    async fn test_handle_delegation_not_a_command() {
+        let handler = make_handler_with_agents();
+        let result = handler
+            .handle_delegation("hello world", "12345", "user1", "1", "fake_token")
+            .await;
+        assert!(matches!(result, DelegationResult::NotADelegationCommand));
+    }
+
+    #[tokio::test]
+    async fn test_handle_delegation_success() {
+        let handler = make_handler_with_agents();
+        let result = handler
+            .handle_delegation(
+                "delegate to cc: fix the auth bug",
+                "12345",
+                "user1",
+                "1",
+                "fake_token",
+            )
+            .await;
+        assert!(matches!(result, DelegationResult::Handled));
+
+        // Verify task was tracked
+        assert!(handler.last_task_per_chat.contains_key("12345"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_delegation_agent_not_found() {
+        let handler = make_handler_empty();
+        let result = handler
+            .handle_delegation(
+                "delegate to nonexistent: fix bug",
+                "12345",
+                "user1",
+                "1",
+                "fake_token",
+            )
+            .await;
+        assert!(matches!(result, DelegationResult::Handled));
+
+        // No task should be tracked
+        assert!(!handler.last_task_per_chat.contains_key("12345"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_delegation_agent_disconnected() {
+        let handler = make_handler_with_disconnected_agent();
+        let result = handler
+            .handle_delegation(
+                "delegate to cc: fix bug",
+                "12345",
+                "user1",
+                "1",
+                "fake_token",
+            )
+            .await;
+        assert!(matches!(result, DelegationResult::Handled));
+
+        // No task should be tracked (delegation failed)
+        assert!(!handler.last_task_per_chat.contains_key("12345"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_stop_no_tracked_task() {
+        let handler = make_handler_with_agents();
+        let handled = handler
+            .handle_stop("/stop", "12345", "1", "fake_token")
+            .await;
+        // No tracked task, should return false
+        assert!(!handled);
+    }
+
+    #[tokio::test]
+    async fn test_handle_stop_with_tracked_task() {
+        let handler = make_handler_with_agents();
+
+        // First delegate a task to track it
+        handler
+            .handle_delegation(
+                "delegate to cc: fix the auth bug",
+                "12345",
+                "user1",
+                "1",
+                "fake_token",
+            )
+            .await;
+
+        // Give the queue time to process
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Now /stop should find the tracked task
+        let handled = handler
+            .handle_stop("/stop", "12345", "2", "fake_token")
+            .await;
+        assert!(handled);
+
+        // Task should be removed from tracking
+        assert!(!handler.last_task_per_chat.contains_key("12345"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_stop_with_explicit_task_id() {
+        let handler = make_handler_with_agents();
+
+        // Delegate a task first
+        handler
+            .handle_delegation(
+                "delegate to cc: fix bug",
+                "12345",
+                "user1",
+                "1",
+                "fake_token",
+            )
+            .await;
+
+        // Give the queue time to process
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Get the tracked task ID
+        let task_id = handler
+            .last_task_per_chat
+            .get("12345")
+            .map(|e| e.value().clone())
+            .unwrap();
+
+        // Stop with explicit task ID
+        let handled = handler
+            .handle_stop(&format!("/stop {}", task_id), "12345", "2", "fake_token")
+            .await;
+        assert!(handled);
+    }
+
+    #[tokio::test]
+    async fn test_handle_stop_non_stop_command() {
+        let handler = make_handler_with_agents();
+        let handled = handler
+            .handle_stop("hello world", "12345", "1", "fake_token")
+            .await;
+        assert!(!handled);
+    }
+
+    #[test]
+    fn test_format_available_agents_empty() {
+        // Use a runtime since TaskQueue::new requires one
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let handler = make_handler_empty();
+            let result = handler.format_available_agents();
+            assert_eq!(result, "  (no agents registered)");
+        });
+    }
+
+    #[test]
+    fn test_format_available_agents_with_agents() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let handler = make_handler_with_agents();
+            let result = handler.format_available_agents();
+            assert!(result.contains("claude-code-1"));
+            assert!(result.contains("(alias: cc)"));
+            assert!(result.contains("kiro-cli-1"));
+            assert!(result.contains("(alias: kiro)"));
+        });
+    }
+
+    #[test]
+    fn test_resolve_display_name_by_id() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let handler = make_handler_with_agents();
+            // Without a backend definition loaded, it should fall back to the agent ID
+            let name = handler.resolve_display_name("claude-code-1");
+            assert_eq!(name, "claude-code-1");
+        });
+    }
+
+    #[test]
+    fn test_resolve_display_name_unknown() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let handler = make_handler_with_agents();
+            let name = handler.resolve_display_name("nonexistent");
+            assert_eq!(name, "nonexistent");
+        });
     }
 }

@@ -103,7 +103,7 @@ fn arb_chunking_strategy() -> impl Strategy<Value = ChunkingStrategy> {
 }
 
 fn arb_log_format() -> impl Strategy<Value = LogFormat> {
-    prop_oneof![Just(LogFormat::Text), Just(LogFormat::Json),]
+    prop_oneof![Just(LogFormat::Text), Just(LogFormat::Json), Just(LogFormat::Pretty),]
 }
 
 #[allow(dead_code)]
@@ -244,6 +244,8 @@ fn arb_agent_entry() -> impl Strategy<Value = AgentEntry> {
             skills,
             browser: None,
             tools: vec![],
+            max_iterations: None,
+            acp: None,
         })
 }
 
@@ -345,6 +347,7 @@ fn arb_server_settings() -> impl Strategy<Value = ServerSettings> {
             bind,
             auth,
             drain_timeout_secs: 30,
+            encryption: None,
         })
 }
 
@@ -512,6 +515,9 @@ fn arb_cron_job() -> impl Strategy<Value = CronJob> {
             schedule,
             message,
             deliver_to,
+            suppress_keyword: None,
+            target: None,
+            workspace: None,
         })
 }
 
@@ -608,6 +614,8 @@ fn arb_telemetry_config() -> impl Strategy<Value = TelemetryConfig> {
             log_format,
             otel_endpoint,
             metrics_enabled,
+            log_dir: None,
+            log_rotation: Default::default(),
         },
     )
 }
@@ -657,6 +665,14 @@ fn arb_gateway_config() -> impl Strategy<Value = GatewayConfig> {
                 graph_workflow: None,
                 mcp_servers: vec![],
                 awp: adk_gateway::awp::AwpConfig::default(),
+                runner: adk_gateway::config::GatewayRunnerConfig::default(),
+                rate_limiter: adk_gateway::config::RateLimitConfig::default(),
+                tool_approval: adk_gateway::config::ApprovalConfig::default(),
+                stale_context: adk_gateway::config::StaleContextConfig::default(),
+                heartbeat_v2: adk_gateway::config::HeartbeatV2Config::default(),
+                multi_user: adk_gateway::config::MultiUserConfig::default(),
+                health_monitor: adk_gateway::config::HealthMonitorConfig::default(),
+                coding_agents: adk_gateway::coding_agent::config::CodingAgentsConfig::default(),
             }
         },
     )

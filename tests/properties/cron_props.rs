@@ -32,6 +32,9 @@ fn cron_job_strategy() -> impl Strategy<Value = CronJob> {
                 schedule,
                 message,
                 deliver_to,
+                suppress_keyword: None,
+                target: None,
+                workspace: None,
             }
         })
 }

@@ -9,6 +9,11 @@ use crate::agent_registry::AgentRegistry;
 use crate::audit::{AuditSink, FileAuditSink, NullAuditSink};
 use crate::browser_factory::BrowserToolFactory;
 use crate::channel::{Channel, ChannelKey};
+use crate::coding_agent::cost::CostTracker;
+use crate::coding_agent::delegator::TaskDelegator;
+use crate::coding_agent::history::TaskHistory;
+use crate::coding_agent::queue::TaskQueue;
+use crate::coding_agent::registry::CodingAgentRegistry;
 use crate::config::GatewayConfig;
 use crate::control_panel::ControlPanelState;
 use crate::cron::CronScheduler;
@@ -99,6 +104,16 @@ pub struct GatewayState {
     /// Progress messages queued by tool callbacks, keyed by user_id.
     /// The typing loop drains these and sends them to the user.
     pub progress_messages: Arc<DashMap<String, Vec<String>>>,
+    /// Coding agent registry (None when coding agents are disabled).
+    pub coding_agent_registry: Option<Arc<CodingAgentRegistry>>,
+    /// Coding agent task delegator (None when coding agents are disabled).
+    pub coding_agent_delegator: Option<Arc<TaskDelegator>>,
+    /// Coding agent task queue (None when coding agents are disabled).
+    pub coding_agent_queue: Option<Arc<TaskQueue>>,
+    /// Coding agent cost tracker (None when coding agents are disabled).
+    pub coding_agent_cost_tracker: Option<Arc<CostTracker>>,
+    /// Coding agent task history (None when coding agents are disabled).
+    pub coding_agent_history: Option<Arc<TaskHistory>>,
 }
 
 /// Build all gateway components from config.
@@ -543,6 +558,89 @@ pub async fn build(
     }));
     tracing::info!(path = %task_log_path.display(), "task log store initialized");
 
+    // ── Coding agent subsystem initialization ──────────────────────
+    let (coding_agent_registry, coding_agent_delegator, coding_agent_queue, coding_agent_cost_tracker, coding_agent_history) =
+        if config.coding_agents.enabled {
+            tracing::info!("coding agent subsystem enabled, initializing components");
+
+            // Create registry from config (loads backends and registers agents)
+            let ca_registry = Arc::new(CodingAgentRegistry::from_config(&config.coding_agents));
+            tracing::info!(
+                agents = ca_registry.agent_count(),
+                backends = ca_registry.backend_count(),
+                "coding agent registry initialized"
+            );
+
+            // Create task queue with configured max_concurrent
+            let ca_queue = TaskQueue::new(Some(config.coding_agents.max_concurrent_tasks));
+            tracing::info!(
+                max_concurrent = config.coding_agents.max_concurrent_tasks,
+                "coding agent task queue initialized"
+            );
+
+            // Create cost tracker
+            let ca_cost_tracker = Arc::new(CostTracker::new());
+
+            // Set per-agent cost caps from config
+            for agent_cfg in &config.coding_agents.agents {
+                if let Some(cap) = agent_cfg.cost_cap_usd {
+                    ca_cost_tracker.set_task_cap(&agent_cfg.id, cap);
+                }
+            }
+            tracing::info!("coding agent cost tracker initialized");
+
+            // Create task history (200 entries per agent)
+            let ca_history = Arc::new(TaskHistory::new());
+            tracing::info!("coding agent task history initialized");
+
+            // Create task delegator wiring registry, queue, and cost tracker
+            let ca_delegator = Arc::new(TaskDelegator::new(
+                ca_registry.clone(),
+                ca_queue.clone(),
+                ca_cost_tracker.clone(),
+            ));
+            tracing::info!("coding agent task delegator initialized");
+
+            // Create TaskExecutor with ACP-backed agent executor and spawn its background loop
+            let ca_executor = {
+                use crate::coding_agent::executor::{AcpAgentExecutor, TaskExecutor, TaskHistory as ExecutorTaskHistory};
+
+                let agent_executor = Arc::new(AcpAgentExecutor::new());
+                let executor_history = Arc::new(ExecutorTaskHistory::new(200));
+                let executor = Arc::new(TaskExecutor::new(
+                    ca_queue.clone(),
+                    ca_registry.clone(),
+                    ca_cost_tracker.clone(),
+                    executor_history,
+                    agent_executor,
+                    config.coding_agents.default_timeout_secs,
+                    config.tool_approval.clone(),
+                ));
+
+                // Spawn the executor's background processing loop
+                let executor_clone = executor.clone();
+                tokio::spawn(async move {
+                    executor_clone.run().await;
+                });
+
+                tracing::info!("coding agent task executor spawned");
+                executor
+            };
+            // Keep executor alive by storing in a variable (it's referenced by the spawned task)
+            let _executor = ca_executor;
+
+            (
+                Some(ca_registry),
+                Some(ca_delegator),
+                Some(ca_queue),
+                Some(ca_cost_tracker),
+                Some(ca_history),
+            )
+        } else {
+            tracing::debug!("coding agent subsystem disabled");
+            (None, None, None, None, None)
+        };
+
     // Finalize control panel with AWP state and other subsystem references
     let mut control_panel_builder = control_panel_builder
         .with_mcp_manager(mcp_manager.clone())
@@ -558,6 +656,22 @@ pub async fn build(
         .with_task_log(task_log.clone());
     if let Some(ref awp) = awp_state {
         control_panel_builder = control_panel_builder.with_awp_state(awp.clone());
+    }
+    // Wire coding agent registry and panel state into control panel
+    if let Some(ref ca_registry) = coding_agent_registry {
+        control_panel_builder = control_panel_builder
+            .with_coding_agent_registry(ca_registry.clone());
+    }
+    if let (Some(ref ca_registry), Some(ref ca_delegator), Some(ref ca_cost_tracker), Some(ref ca_history)) =
+        (&coding_agent_registry, &coding_agent_delegator, &coding_agent_cost_tracker, &coding_agent_history)
+    {
+        let ca_panel_state = crate::control_panel::coding_agents::CodingAgentPanelState {
+            registry: ca_registry.clone(),
+            delegator: ca_delegator.clone(),
+            cost_tracker: ca_cost_tracker.clone(),
+            task_history: ca_history.clone(),
+        };
+        control_panel_builder = control_panel_builder.with_coding_agent_state(ca_panel_state);
     }
     let control_panel = Arc::new(control_panel_builder);
     let tool_registry_for_state = control_panel
@@ -678,5 +792,10 @@ pub async fn build(
         agent_instruction: Arc::new(agent_instruction),
         active_requests: Arc::new(DashMap::new()),
         progress_messages: Arc::new(DashMap::new()),
+        coding_agent_registry,
+        coding_agent_delegator,
+        coding_agent_queue,
+        coding_agent_cost_tracker,
+        coding_agent_history,
     })
 }

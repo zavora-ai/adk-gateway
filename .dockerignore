@@ -1,0 +1,63 @@
+# =============================================================================
+# .dockerignore — Exclude files from Docker build context
+# =============================================================================
+# Keeps the build context small and prevents sensitive/unnecessary files
+# from being sent to the Docker daemon.
+
+# Build artifacts (Rust)
+target/
+**/target/
+debug/
+release/
+
+# Version control
+.git/
+.gitignore
+
+# IDE and editor files
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# Runtime data and logs
+logs/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.jsonl
+paired_users.json
+
+# Environment and secrets
+.env
+.env.*
+
+# Kiro workspace
+.kiro/
+
+# Playwright MCP output
+.playwright-mcp/
+tmp/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+._*
+
+# Reference repos (not needed in production image)
+reference/
+
+# React UI node_modules (rebuilt in Docker if needed)
+ui/node_modules/
+
+# Documentation (not needed in runtime image)
+docs/
+context/
+examples/
+
+# Test artifacts
+proptest-regressions/
+*.proptest-regressions

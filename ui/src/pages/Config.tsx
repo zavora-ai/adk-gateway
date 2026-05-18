@@ -3,6 +3,23 @@ import { api } from '../api/client';
 import AlertBanner from '../components/AlertBanner';
 import { useState } from 'react';
 
+/** Mask encrypted values in config display */
+function maskEncryptedValues(obj: unknown): unknown {
+  if (typeof obj === 'string') {
+    if (obj.startsWith('enc:')) return 'enc:****';
+    return obj;
+  }
+  if (Array.isArray(obj)) return obj.map(maskEncryptedValues);
+  if (obj && typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      result[key] = maskEncryptedValues(value);
+    }
+    return result;
+  }
+  return obj;
+}
+
 export default function Config() {
   const { data, loading, error, refetch } = useApi<Record<string, unknown>>(() => api.config(), []);
   const [editing, setEditing] = useState(false);
@@ -110,7 +127,7 @@ export default function Config() {
           />
         ) : (
           <pre className="bg-gray-900 text-green-400 rounded-lg p-4 overflow-auto text-sm font-mono max-h-[600px]">
-            {data ? JSON.stringify(data, null, 2) : 'No configuration loaded'}
+            {data ? JSON.stringify(maskEncryptedValues(data), null, 2) : 'No configuration loaded'}
           </pre>
         )}
       </div>

@@ -2,50 +2,19 @@
 //!
 //! OpenClaw-compatible configuration. Connects Telegram, Slack, and more
 //! to your adk-rust agents via a single long-running binary.
+//!
+//! This binary uses the `adk_gateway` library crate for all functionality.
+//! CLI parsing and the entry point live here; everything else is in lib.rs.
 
-mod access_control;
-mod action_executor;
-mod agent_codegen;
-mod agent_config;
-mod agent_registry;
-mod audit;
-mod awp;
-mod browser_factory;
-mod channel;
-mod config;
-mod config_watcher;
-mod context_coordinator;
-mod control_panel;
-mod cron;
-mod delivery;
-mod event_stream;
-mod executable_tools;
-mod fallback_chain;
-mod task_log;
-mod gateway;
-mod gateway_routes;
-mod gateway_state;
-mod graph_workflow;
-mod jwt;
-mod knowledge_graph;
-mod mcp;
-mod metrics;
-mod model_factory;
-mod pairing;
-mod plugin_manager;
-mod process_manager;
-mod proxy_pool;
-mod rag;
-mod rbac_bridge;
-mod reconnect;
-mod router;
-mod session_bridge;
-mod shutdown;
-mod skill_loader;
-mod sqlrite_store;
-mod telemetry;
-mod tool_registry;
-mod webhook;
+use adk_gateway::channel;
+use adk_gateway::config;
+use adk_gateway::config_encryption;
+use adk_gateway::gateway;
+use adk_gateway::knowledge_graph;
+use adk_gateway::mcp;
+use adk_gateway::pairing;
+use adk_gateway::rag;
+use adk_gateway::telemetry;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -111,6 +80,13 @@ enum Commands {
     /// MCP server management
     #[command(subcommand)]
     Mcp(McpCommands),
+
+    /// Encrypt sensitive config values in-place
+    ConfigEncrypt {
+        /// Path to the encryption key file (32 bytes raw or base64-encoded)
+        #[arg(long)]
+        key_file: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -213,10 +189,10 @@ async fn main() -> anyhow::Result<()> {
         EnvFilter::new("adk_gateway=info,tower_http=info")
     };
 
-    let telemetry = telemetry::TelemetrySetup::from_config(&cfg.telemetry);
-    telemetry.init(filter);
+    let telemetry_setup = telemetry::TelemetrySetup::from_config(&cfg.telemetry);
+    telemetry_setup.init(filter);
 
-    tracing::info!(telemetry = %telemetry.describe(), "telemetry initialized");
+    tracing::info!(telemetry = %telemetry_setup.describe(), "telemetry initialized");
 
     match cli.command {
         None | Some(Commands::Gateway { .. }) => {
@@ -316,7 +292,21 @@ async fn main() -> anyhow::Result<()> {
         },
         Some(Commands::Mcp(mcp_cmd)) => {
             handle_mcp_command(mcp_cmd, &config_path, &cfg)?;
-        },
+        }
+        Some(Commands::ConfigEncrypt { key_file }) => {
+            match config_encryption::encrypt_config_file(&config_path, &key_file) {
+                Ok(count) => {
+                    println!(
+                        "Encrypted {count} sensitive field(s) in {}",
+                        config_path.display()
+                    );
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
     Ok(())
@@ -341,13 +331,16 @@ fn handle_mcp_command(
             let mut updated_cfg = cfg.clone();
 
             if let Some(json_str) = json {
-                // JSON mode: parse as {"server-name": {"command": "...", "args": [...], "env": {...}}}
                 let parsed: serde_json::Value = serde_json::from_str(&json_str)
                     .map_err(|e| anyhow::anyhow!("invalid JSON: {e}"))?;
 
                 let obj = parsed
                     .as_object()
-                    .ok_or_else(|| anyhow::anyhow!("JSON must be an object mapping server names to configs"))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "JSON must be an object mapping server names to configs"
+                        )
+                    })?;
 
                 for (server_name, server_val) in obj {
                     let server_obj = server_val.as_object().ok_or_else(|| {
@@ -373,7 +366,9 @@ fn handle_mcp_command(
                             .and_then(|e| e.as_object())
                             .map(|obj| {
                                 obj.iter()
-                                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                                    .filter_map(|(k, v)| {
+                                        v.as_str().map(|s| (k.clone(), s.to_string()))
+                                    })
                                     .collect()
                             })
                             .unwrap_or_default();
@@ -404,12 +399,13 @@ fn handle_mcp_command(
                         enabled: !is_disabled,
                     };
 
-                    updated_cfg.mcp_servers.retain(|s| s.server_id != *server_name);
+                    updated_cfg
+                        .mcp_servers
+                        .retain(|s| s.server_id != *server_name);
                     updated_cfg.mcp_servers.push(new_server);
                     println!("Added MCP server '{server_name}'");
                 }
             } else {
-                // Flag-based mode
                 let name = name.expect("name is required when --json is not used");
                 let transport = if let Some(cmd_str) = command {
                     let env_map: std::collections::HashMap<String, String> = env
@@ -446,7 +442,6 @@ fn handle_mcp_command(
                 println!("Added MCP server '{name}'");
             }
 
-            // Write back
             let output = serde_json::to_string_pretty(&updated_cfg)?;
             std::fs::write(config_path, &output)?;
         }
@@ -475,7 +470,10 @@ fn handle_mcp_command(
                         mcp::McpTransport::Sse { .. } => "sse",
                     };
                     let enabled = if server.enabled { "yes" } else { "no" };
-                    println!("{:<20} {:<10} {:<10}", server.server_id, transport_type, enabled);
+                    println!(
+                        "{:<20} {:<10} {:<10}",
+                        server.server_id, transport_type, enabled
+                    );
                 }
             }
         }

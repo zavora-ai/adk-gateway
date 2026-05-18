@@ -31,11 +31,19 @@ Config is saved to `~/.openclaw/openclaw.json` and hot-reloads on edit.
 - **14 LLM Providers** — Gemini, Claude, GPT, Ollama, DeepSeek, Groq, OpenRouter, and more
 - **Fallback Chains** — Automatic retry across multiple models on failure
 - **Multi-Agent** — Create, start, stop, configure specialist agents at runtime
+- **Multi-User** — Multiple paired users per channel with independent sessions
 - **Persistent Memory** — SQLite-backed knowledge graph with entity extraction and search (survives restarts)
 - **RAG** — Document ingestion with vector/hybrid/filtered search
 - **Graph Workflows** — DAG-based execution with agent nodes, action nodes, conditional routing
 - **Scheduled Tasks** — Cron-style jobs with agent prompts, delivery targets, suppress keywords, activity logs
-- **System Heartbeat** — Auto-created hourly check-in with configurable suppress keyword
+- **Heartbeat V2** — Session-integrated heartbeat with full conversation context
+- **Tool Approval** — Interactive approve/reject for dangerous tool calls via Telegram inline buttons
+- **Stale Context Detection** — Welcome-back messages after idle periods with pending task summaries
+- **Rate Limiting** — Sliding-window rate limiter prevents runaway tool loops
+- **Health Monitoring** — Periodic health checks with webhook/Telegram alerting
+- **Config Encryption** — AES-256-GCM encryption for sensitive config values at rest
+- **Zero-Downtime Restart** — SIGUSR1 graceful restart with drain phases
+- **ACP Integration** — Delegate tasks to Claude Code or Codex via Agent Communication Protocol
 - **MCP Integration** — Connect external tool servers (computer-use, browser, media) via Model Context Protocol
 - **108 Agent Tools** — Filesystem, KG, agents, tasks, MCP tools, send_photo, all callable by the LLM
 - **Access Control** — DM pairing, RBAC, role-based tool access, JWT/SSO
@@ -47,6 +55,7 @@ Config is saved to `~/.openclaw/openclaw.json` and hot-reloads on edit.
 - **Progress Messages** — Tool execution updates sent to user during long operations
 - **Cancel Support** — `/stop` command cancels in-flight requests
 - **Image Delivery** — `send_photo` tool sends images directly to Telegram
+- **Docker + Systemd** — Production-ready Dockerfile and systemd service
 
 ## Control Panel
 
@@ -117,6 +126,7 @@ adk-gateway pairing generate-code
 adk-gateway mcp add --json '{"server": {"command": "npx", "args": ["-y", "pkg"]}}'
 adk-gateway mcp list
 adk-gateway mcp remove <server-id>
+adk-gateway config encrypt                # Encrypt sensitive config values in-place
 ```
 
 ## Development
@@ -148,7 +158,28 @@ cargo build --release
 ./target/release/adk-gateway
 ```
 
-See [docs/deployment-guide.md](docs/deployment-guide.md) for Docker, systemd, and production setup.
+**Docker:**
+
+```bash
+docker build -t adk-gateway .
+docker run -v ~/.openclaw:/config -p 18789:18789 adk-gateway
+```
+
+**Systemd:**
+
+```bash
+sudo cp adk-gateway.service /etc/systemd/system/
+sudo systemctl enable --now adk-gateway
+```
+
+**Launchd (macOS):**
+
+```bash
+cp com.zavora.adk-gateway.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.zavora.adk-gateway.plist
+```
+
+See [docs/deployment-guide.md](docs/deployment-guide.md) for full production setup.
 
 ## Agent Tools
 
@@ -170,8 +201,6 @@ The system agent has access to 108+ tools across these categories:
 |---|---|
 | Multi-Agent Codegen | Experimental — generates agent binaries but A2A endpoints are placeholder |
 | AWP Commerce | Placeholder — protocol endpoints work, commerce capabilities are declarations only |
-| Max Iterations | Runner hardcoded at 100 — can cause loops with smaller models (timeout at 90s mitigates) |
-| Heartbeat Context | Runs in isolated session — no conversation history (KG context available) |
 
 ## License
 

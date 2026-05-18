@@ -11,16 +11,16 @@
 Move Gemini-specific JSON Schema fixes out of the MCP tool layer and into the model adapter. Create `src/schema_sanitizer.rs` with a `SchemaSanitizer` trait, a `GeminiSanitizer` implementation (removes/transforms `exclusiveMinimum`, `exclusiveMaximum`, array-typed `items`, `propertyNames`, array-typed `type`), and an `IdentitySanitizer` for providers that accept standard JSON Schema (OpenAI, Anthropic). Remove the existing `sanitize_schema` function from the `adk-tool` layer. Store original schemas unmodified and apply provider-specific transformations only at model invocation time.
 
 ### Acceptance Criteria
-- [ ] `SchemaSanitizer` trait defined with `fn sanitize(&self, schema: &serde_json::Value) -> serde_json::Value`
-- [ ] `GeminiSanitizer` removes `propertyNames` from schemas
-- [ ] `GeminiSanitizer` converts `exclusiveMinimum: N` → `minimum: N+1` for integer types
-- [ ] `GeminiSanitizer` converts `exclusiveMaximum: N` → `maximum: N-1` for integer types
-- [ ] `GeminiSanitizer` converts array-typed `type` (e.g., `["string", "null"]`) to single type with `nullable: true`
-- [ ] `GeminiSanitizer` converts array-typed `items` to single schema (first element)
-- [ ] `IdentitySanitizer` returns schema unchanged (clone)
-- [ ] Existing `sanitize_schema` removed from MCP/adk-tool layer
-- [ ] Original MCP tool schemas stored unmodified in gateway state
-- [ ] Property-based tests validate Properties 4, 5, and 6 from design
+- [x] `SchemaSanitizer` trait defined with `fn sanitize(&self, schema: &serde_json::Value) -> serde_json::Value`
+- [x] `GeminiSanitizer` removes `propertyNames` from schemas
+- [x] `GeminiSanitizer` converts `exclusiveMinimum: N` → `minimum: N+1` for integer types
+- [x] `GeminiSanitizer` converts `exclusiveMaximum: N` → `maximum: N-1` for integer types
+- [x] `GeminiSanitizer` converts array-typed `type` (e.g., `["string", "null"]`) to single type with `nullable: true`
+- [x] `GeminiSanitizer` converts array-typed `items` to single schema (first element)
+- [x] `IdentitySanitizer` returns schema unchanged (clone)
+- [x] Existing `sanitize_schema` removed from MCP/adk-tool layer
+- [x] Original MCP tool schemas stored unmodified in gateway state
+- [x] Property-based tests validate Properties 4, 5, and 6 from design
 
 ### Files to modify/create
 - `src/schema_sanitizer.rs` (create)
@@ -42,14 +42,14 @@ Move Gemini-specific JSON Schema fixes out of the MCP tool layer and into the mo
 Add `max_iterations` configuration to the Runner. The gateway passes a default of 25 iterations per request. Validate that the value is within [1, 1000] at config load time. The Runner terminates the tool-call loop when the iteration count reaches `max_iterations` and returns a partial result with a `max_iterations_reached` indicator. Include iteration count in response metadata.
 
 ### Acceptance Criteria
-- [ ] `GatewayRunnerConfig` struct with `max_iterations: u32` field (default: 25)
-- [ ] Validation rejects values < 1 or > 1000 with a clear error
-- [ ] Gateway passes `max_iterations` to the Runner on every request
-- [ ] Runner terminates loop at exactly `max_iterations` and returns partial result
-- [ ] Response metadata includes `iteration_count` and `max_iterations_reached: bool`
-- [ ] Per-request override of `max_iterations` supported via gateway config
-- [ ] Property-based tests validate Property 7 from design
-- [ ] Unit tests cover boundary values (0, 1, 1000, 1001)
+- [x] `GatewayRunnerConfig` struct with `max_iterations: u32` field (default: 25)
+- [x] Validation rejects values < 1 or > 1000 with a clear error
+- [x] Gateway passes `max_iterations` to the Runner on every request
+- [x] Runner terminates loop at exactly `max_iterations` and returns partial result
+- [x] Response metadata includes `iteration_count` and `max_iterations_reached: bool`
+- [x] Per-request override of `max_iterations` supported via gateway config
+- [x] Property-based tests validate Property 7 from design
+- [x] Unit tests cover boundary values (0, 1, 1000, 1001)
 
 ### Files to modify/create
 - `src/config.rs` (add `GatewayRunnerConfig`, validation)
@@ -70,15 +70,15 @@ Add `max_iterations` configuration to the Runner. The gateway passes a default o
 Create `src/rate_limiter.rs` with a sliding-window rate limiter for tool invocations. Default: 10 calls per 5-second window. When exceeded, pause for a configurable cooldown (default: 3s). If triggered 3 times in a single request, terminate the request and notify the user. Integrate into the `after_tool_callback` in the runner bridge. Replace the current dedup check with this more robust mechanism. Log each trigger event with tool names and invocation count.
 
 ### Acceptance Criteria
-- [ ] `RateLimiter` struct with sliding window using `VecDeque<Instant>`
-- [ ] `RateLimitDecision` enum: `Allow`, `Pause { duration }`, `Terminate { reason }`
-- [ ] `record_invocation` correctly counts calls within the sliding window
-- [ ] Pause triggered when calls exceed threshold within window
-- [ ] Termination triggered after 3 pauses in a single request
-- [ ] Each trigger event logged with tool names and count
-- [ ] Per-agent rate limit configuration supported
-- [ ] Integrated into `after_tool_callback` replacing current dedup logic
-- [ ] Property-based tests validate Property 3 from design
+- [x] `RateLimiter` struct with sliding window using `VecDeque<Instant>`
+- [x] `RateLimitDecision` enum: `Allow`, `Pause { duration }`, `Terminate { reason }`
+- [x] `record_invocation` correctly counts calls within the sliding window
+- [x] Pause triggered when calls exceed threshold within window
+- [x] Termination triggered after 3 pauses in a single request
+- [x] Each trigger event logged with tool names and count
+- [x] Per-agent rate limit configuration supported
+- [x] Integrated into `after_tool_callback` replacing current dedup logic
+- [x] Property-based tests validate Property 3 from design
 
 ### Files to modify/create
 - `src/rate_limiter.rs` (create)
@@ -100,16 +100,16 @@ Create `src/rate_limiter.rs` with a sliding-window rate limiter for tool invocat
 Create `src/tool_approval.rs` implementing an interactive tool approval flow. When the Runner invokes a tool marked as `requires_approval`, execution pauses and a Telegram message with inline keyboard buttons (✅ Approve / ❌ Reject) is sent to the user. The system waits up to 120 seconds for a response. Implement the `ToolApprovalService` trait, callback handler for Telegram inline button presses, and default classification of dangerous tools (file writes, shell exec, destructive ops). Support custom approval rules from config.
 
 ### Acceptance Criteria
-- [ ] `ToolApprovalService` trait with `requires_approval`, `request_approval`, `handle_callback`
-- [ ] `ApprovalState` enum: `Pending`, `Approved`, `Rejected`, `TimedOut`
-- [ ] Telegram inline keyboard with ✅ Approve / ❌ Reject buttons sent on dangerous tool calls
-- [ ] Callback handler processes button presses and resolves pending approvals
-- [ ] 120-second timeout auto-rejects and notifies user
-- [ ] Default dangerous categories: `fs_write`, `fs_delete`, `shell_exec`, `run_command`
-- [ ] Custom approval rules from config override defaults
-- [ ] "⏳ Waiting for approval..." status message displayed while pending
-- [ ] Integration with `before_tool_callback` in runner bridge
-- [ ] Property-based tests validate Property 1 from design
+- [x] `ToolApprovalService` trait with `requires_approval`, `request_approval`, `handle_callback`
+- [x] `ApprovalState` enum: `Pending`, `Approved`, `Rejected`, `TimedOut`
+- [x] Telegram inline keyboard with ✅ Approve / ❌ Reject buttons sent on dangerous tool calls
+- [x] Callback handler processes button presses and resolves pending approvals
+- [x] 120-second timeout auto-rejects and notifies user
+- [x] Default dangerous categories: `fs_write`, `fs_delete`, `shell_exec`, `run_command`
+- [x] Custom approval rules from config override defaults
+- [x] "⏳ Waiting for approval..." status message displayed while pending
+- [x] Integration with `before_tool_callback` in runner bridge
+- [x] Property-based tests validate Property 1 from design
 
 ### Files to modify/create
 - `src/tool_approval.rs` (create)
@@ -132,13 +132,13 @@ Create `src/tool_approval.rs` implementing an interactive tool approval flow. Wh
 Create `src/stale_context.rs` implementing idle period detection. On each incoming message, check the user's `last_activity` timestamp from session history. If the idle period exceeds the configured threshold (default: 4 hours), build and send a welcome-back message summarizing pending tasks, heartbeat alerts, and time since last interaction. If no pending items exist, send a brief acknowledgment.
 
 ### Acceptance Criteria
-- [ ] `StaleContextDetector` struct with configurable `idle_threshold_secs` (default: 14400)
-- [ ] `is_stale` function correctly compares timestamps against threshold
-- [ ] `build_welcome_back` includes: idle duration, pending task count, heartbeat alerts
-- [ ] Brief acknowledgment sent when no pending items or alerts exist
-- [ ] Custom idle threshold supported via config
-- [ ] Integrated into message processing pipeline (checked on message arrival)
-- [ ] Property-based tests validate Property 2 from design
+- [x] `StaleContextDetector` struct with configurable `idle_threshold_secs` (default: 14400)
+- [x] `is_stale` function correctly compares timestamps against threshold
+- [x] `build_welcome_back` includes: idle duration, pending task count, heartbeat alerts
+- [x] Brief acknowledgment sent when no pending items or alerts exist
+- [x] Custom idle threshold supported via config
+- [x] Integrated into message processing pipeline (checked on message arrival)
+- [x] Property-based tests validate Property 2 from design
 
 ### Files to modify/create
 - `src/stale_context.rs` (create)
@@ -160,16 +160,16 @@ Create `src/stale_context.rs` implementing idle period detection. On each incomi
 Create `src/heartbeat_v2.rs` replacing the current cron-based heartbeat. The new heartbeat runs within the user's active session with full conversation context. It injects a heartbeat prompt into the session, processes it through the Runner, and classifies the response. "HEARTBEAT_OK" responses are stripped from history; actionable alerts are retained and delivered to the user. Implement per-user scheduling with independent intervals and cancellation tokens. If no active session exists, create a temporary one for the check.
 
 ### Acceptance Criteria
-- [ ] `HeartbeatV2` struct with per-user `DashMap<String, HeartbeatSchedule>`
-- [ ] Heartbeat executes within user's session with full history context
-- [ ] Heartbeat prompt injected into session and processed through Runner
-- [ ] `classify_response` correctly identifies "HEARTBEAT_OK" vs actionable alerts
-- [ ] `strip_heartbeat_turns` removes OK turns, retains alert turns, never touches regular turns
-- [ ] Per-user scheduling with independent intervals
-- [ ] Cancellation support via `CancellationToken`
-- [ ] Temporary session created when no active session exists
-- [ ] Current cron-based heartbeat replaced entirely
-- [ ] Property-based tests validate Property 8 from design
+- [x] `HeartbeatV2` struct with per-user `DashMap<String, HeartbeatSchedule>`
+- [x] Heartbeat executes within user's session with full history context
+- [x] Heartbeat prompt injected into session and processed through Runner
+- [x] `classify_response` correctly identifies "HEARTBEAT_OK" vs actionable alerts
+- [x] `strip_heartbeat_turns` removes OK turns, retains alert turns, never touches regular turns
+- [x] Per-user scheduling with independent intervals
+- [x] Cancellation support via `CancellationToken`
+- [x] Temporary session created when no active session exists
+- [x] Current cron-based heartbeat replaced entirely
+- [x] Property-based tests validate Property 8 from design
 
 ### Files to modify/create
 - `src/heartbeat_v2.rs` (create)
@@ -193,14 +193,14 @@ Create `src/heartbeat_v2.rs` replacing the current cron-based heartbeat. The new
 Create `src/multi_user.rs` extending the pairing system to support multiple users per channel. Each paired user gets an independent session, heartbeat schedule, and delivery target. Implement per-user session isolation, thread-aware group responses, and agent routing for group chats. Removing a user stops their heartbeat and session without affecting others.
 
 ### Acceptance Criteria
-- [ ] `MultiUserManager` with `DashMap<(ChannelType, String), PairedUser>`
-- [ ] `add_user` registers new user without affecting existing pairings
-- [ ] `remove_user` stops heartbeat and session for that user only
-- [ ] Per-user session isolation (separate `Session_History` per user)
-- [ ] Thread context used to scope responses in group chats
-- [ ] `Agent_Router` routes messages from specific groups to designated agents
-- [ ] Heartbeat V2 delivers alerts independently per paired user
-- [ ] Property-based tests validate Properties 9 and 10 from design
+- [x] `MultiUserManager` with `DashMap<(ChannelType, String), PairedUser>`
+- [x] `add_user` registers new user without affecting existing pairings
+- [x] `remove_user` stops heartbeat and session for that user only
+- [x] Per-user session isolation (separate `Session_History` per user)
+- [x] Thread context used to scope responses in group chats
+- [x] `Agent_Router` routes messages from specific groups to designated agents
+- [x] Heartbeat V2 delivers alerts independently per paired user
+- [x] Property-based tests validate Properties 9 and 10 from design
 
 ### Files to modify/create
 - `src/multi_user.rs` (create)
@@ -224,14 +224,14 @@ Create `src/multi_user.rs` extending the pairing system to support multiple user
 Add `adk-acp` as an optional dependency behind the `acp` feature flag. Create `src/acp.rs` (feature-gated) implementing ACP tool registration and execution. Register ACP tools per-agent based on config. Support task delegation to Claude Code or Codex with configurable timeout (default: 300s). Send periodic progress messages to the user during long-running tasks. Handle endpoint errors gracefully without crashing.
 
 ### Acceptance Criteria
-- [ ] `adk-acp` added as optional dependency with `acp` feature flag
-- [ ] `AcpTool` struct with `execute` method for task delegation
-- [ ] ACP tools registered per-agent based on gateway config
-- [ ] Support for Claude Code and Codex agent types
-- [ ] Configurable timeout (default: 300s) for long-running tasks
-- [ ] Periodic progress messages sent to user during execution
-- [ ] Graceful error handling: unreachable endpoint returns descriptive error, no crash
-- [ ] Feature-gated compilation (`#[cfg(feature = "acp")]`)
+- [x] `adk-acp` added as optional dependency with `acp` feature flag
+- [x] `AcpTool` struct with `execute` method for task delegation
+- [x] ACP tools registered per-agent based on gateway config
+- [x] Support for Claude Code and Codex agent types
+- [x] Configurable timeout (default: 300s) for long-running tasks
+- [x] Periodic progress messages sent to user during execution
+- [x] Graceful error handling: unreachable endpoint returns descriptive error, no crash
+- [x] Feature-gated compilation (`#[cfg(feature = "acp")]`)
 
 ### Files to modify/create
 - `src/acp.rs` (create, feature-gated)
@@ -253,15 +253,15 @@ Add `adk-acp` as an optional dependency behind the `acp` feature flag. Create `s
 Create `src/health_monitor.rs` implementing periodic health checks for gateway components (channel connectivity, model reachability, session store availability). Alert after 3 consecutive failures via configured channel (webhook POST or Telegram message to admin). Emit recovery notifications when a failing component recovers. Expose per-component health status via the existing `/health` endpoint.
 
 ### Acceptance Criteria
-- [ ] `HealthMonitor` with periodic checks (default: every 60 seconds)
-- [ ] Checks cover: channel connectivity, model reachability, session store
-- [ ] Alert emitted after 3 consecutive failures for a component
-- [ ] Recovery notification emitted when component transitions from failed to healthy
-- [ ] No duplicate alerts or recoveries for the same state
-- [ ] Webhook alerting: POST JSON with component name, status, failure count, timestamp
-- [ ] Telegram alerting: message to configured admin user
-- [ ] `/health` endpoint returns per-component breakdown
-- [ ] Property-based tests validate Property 11 from design
+- [x] `HealthMonitor` with periodic checks (default: every 60 seconds)
+- [x] Checks cover: channel connectivity, model reachability, session store
+- [x] Alert emitted after 3 consecutive failures for a component
+- [x] Recovery notification emitted when component transitions from failed to healthy
+- [x] No duplicate alerts or recoveries for the same state
+- [x] Webhook alerting: POST JSON with component name, status, failure count, timestamp
+- [x] Telegram alerting: message to configured admin user
+- [x] `/health` endpoint returns per-component breakdown
+- [x] Property-based tests validate Property 11 from design
 
 ### Files to modify/create
 - `src/health_monitor.rs` (create)
@@ -284,13 +284,13 @@ Create `src/health_monitor.rs` implementing periodic health checks for gateway c
 Extend `src/telemetry.rs` with retention-based log cleanup and size-based rotation. Add configurable retention period (default: 7 days) that deletes older log files. Support size-based rotation (default: 100MB per file). Add configurable log format via `LOG_FORMAT` environment variable (`json` or `pretty`).
 
 ### Acceptance Criteria
-- [ ] Daily log rotation with configurable retention period (default: 7 days)
-- [ ] Files older than retention period automatically deleted
-- [ ] Size-based rotation at configurable threshold (default: 100MB)
-- [ ] `LOG_FORMAT=pretty` outputs human-readable logs
-- [ ] `LOG_FORMAT=json` (default) outputs structured JSON logs
-- [ ] `files_to_delete` function correctly identifies expired files
-- [ ] Property-based tests validate Property 12 from design
+- [x] Daily log rotation with configurable retention period (default: 7 days)
+- [x] Files older than retention period automatically deleted
+- [x] Size-based rotation at configurable threshold (default: 100MB)
+- [x] `LOG_FORMAT=pretty` outputs human-readable logs
+- [x] `LOG_FORMAT=json` (default) outputs structured JSON logs
+- [x] `files_to_delete` function correctly identifies expired files
+- [x] Property-based tests validate Property 12 from design
 
 ### Files to modify/create
 - `src/telemetry.rs` (extend with rotation/retention logic)
@@ -310,16 +310,16 @@ Extend `src/telemetry.rs` with retention-based log cleanup and size-based rotati
 Create `src/config_encryption.rs` implementing AES-256-GCM encryption for sensitive config values. Encrypted values use the `enc:` prefix for identification. Provide a CLI command (`adk-gateway config encrypt`) that encrypts plaintext secrets in-place. Detect sensitive fields by convention (names containing `key`, `token`, `secret`, `password`). Fail fast with a clear error if encrypted values are present but no decryption key is available.
 
 ### Acceptance Criteria
-- [ ] `ConfigEncryption` struct with AES-256-GCM encrypt/decrypt
-- [ ] `encrypt` produces `enc:<base64(nonce+ciphertext)>` format
-- [ ] `decrypt` correctly reverses encryption (round-trip property)
-- [ ] `is_sensitive_field` detects fields containing `key`, `token`, `secret`, `password`
-- [ ] `is_encrypted` checks for `enc:` prefix
-- [ ] CLI command `adk-gateway config encrypt` encrypts sensitive fields in-place
-- [ ] Gateway decrypts encrypted values at startup when key is available
-- [ ] Clear error and exit if encrypted values present without decryption key
-- [ ] Plaintext and encrypted values coexist during migration
-- [ ] Property-based tests validate Properties 14 and 15 from design
+- [x] `ConfigEncryption` struct with AES-256-GCM encrypt/decrypt
+- [x] `encrypt` produces `enc:<base64(nonce+ciphertext)>` format
+- [x] `decrypt` correctly reverses encryption (round-trip property)
+- [x] `is_sensitive_field` detects fields containing `key`, `token`, `secret`, `password`
+- [x] `is_encrypted` checks for `enc:` prefix
+- [x] CLI command `adk-gateway config encrypt` encrypts sensitive fields in-place
+- [x] Gateway decrypts encrypted values at startup when key is available
+- [x] Clear error and exit if encrypted values present without decryption key
+- [x] Plaintext and encrypted values coexist during migration
+- [x] Property-based tests validate Properties 14 and 15 from design
 
 ### Files to modify/create
 - `src/config_encryption.rs` (create)
@@ -343,15 +343,15 @@ Create `src/config_encryption.rs` implementing AES-256-GCM encryption for sensit
 Create a production-ready Dockerfile with multi-stage build (Rust builder + minimal runtime). Final image must be under 100MB. Support feature flag build arguments. Add HEALTHCHECK instruction. Create `adk-gateway.service` systemd unit file with `Type=notify`, automatic restart, and resource limits. Integrate `sd_notify(READY=1)` signaling into the gateway startup sequence.
 
 ### Acceptance Criteria
-- [ ] Dockerfile with multi-stage build: Rust builder + distroless/alpine runtime
-- [ ] Final image size < 100MB (excluding mounted volumes)
-- [ ] Build arguments for feature flags (`--features browser,postgres`)
-- [ ] Configuration from environment variables and/or mounted config file
-- [ ] HEALTHCHECK instruction calling `/health` endpoint
-- [ ] `adk-gateway.service` with `Type=notify` and `sd_notify(READY=1)` integration
-- [ ] Automatic restart on failure with 5-second delay
-- [ ] Resource limits (memory, file descriptors) configured in service file
-- [ ] Graceful shutdown on SIGTERM with configurable drain timeout (default: 30s)
+- [x] Dockerfile with multi-stage build: Rust builder + distroless/alpine runtime
+- [x] Final image size < 100MB (excluding mounted volumes)
+- [x] Build arguments for feature flags (`--features browser,postgres`)
+- [x] Configuration from environment variables and/or mounted config file
+- [x] HEALTHCHECK instruction calling `/health` endpoint
+- [x] `adk-gateway.service` with `Type=notify` and `sd_notify(READY=1)` integration
+- [x] Automatic restart on failure with 5-second delay
+- [x] Resource limits (memory, file descriptors) configured in service file
+- [x] Graceful shutdown on SIGTERM with configurable drain timeout (default: 30s)
 
 ### Files to modify/create
 - `Dockerfile` (create)
@@ -373,15 +373,15 @@ Create a production-ready Dockerfile with multi-stage build (Rust builder + mini
 Extend `src/shutdown.rs` with SIGUSR1 handler for graceful restarts. On SIGUSR1, stop accepting new connections while continuing to process in-flight requests. Support socket-based handoff so the new process can bind before the old releases. Implement drain phases with structured logging at each phase (drain-start, drain-complete, shutdown). Force-terminate remaining requests after drain timeout with logged warnings.
 
 ### Acceptance Criteria
-- [ ] SIGUSR1 signal handler initiates graceful restart
-- [ ] New connections rejected after restart signal received
-- [ ] In-flight requests continue processing until completion or timeout
-- [ ] Socket-based handoff: new process binds before old releases
-- [ ] Drain timeout (default: 30s) force-terminates remaining requests
-- [ ] Structured log events at each phase: `drain-start`, `drain-complete`, `shutdown`
-- [ ] Force-terminated requests logged with request details
-- [ ] In-flight count monotonically non-increasing after shutdown initiation
-- [ ] Property-based tests validate Property 13 from design
+- [x] SIGUSR1 signal handler initiates graceful restart
+- [x] New connections rejected after restart signal received
+- [x] In-flight requests continue processing until completion or timeout
+- [x] Socket-based handoff: new process binds before old releases
+- [x] Drain timeout (default: 30s) force-terminates remaining requests
+- [x] Structured log events at each phase: `drain-start`, `drain-complete`, `shutdown`
+- [x] Force-terminated requests logged with request details
+- [x] In-flight count monotonically non-increasing after shutdown initiation
+- [x] Property-based tests validate Property 13 from design
 
 ### Files to modify/create
 - `src/shutdown.rs` (extend with SIGUSR1 handler, socket handoff)
@@ -404,7 +404,7 @@ Extend `src/shutdown.rs` with SIGUSR1 handler for graceful restarts. On SIGUSR1,
 Build the UI surfaces for tool approval: (1) Telegram inline keyboard buttons for approve/reject, (2) a Control Panel page showing pending approvals with approve/reject actions, and (3) a settings section for configuring which tools require approval.
 
 ### Acceptance Criteria
-- [ ] Telegram message with inline keyboard: `✅ Approve` and `❌ Reject` buttons
+- [-] Telegram message with inline keyboard: `✅ Approve` and `❌ Reject` buttons
 - [ ] Message shows tool name, arguments summary, and "⏳ Waiting for approval..." status
 - [ ] Button press updates the message to show "✅ Approved" or "❌ Rejected" with timestamp
 - [ ] Timeout updates message to "⏰ Timed out (auto-rejected)"

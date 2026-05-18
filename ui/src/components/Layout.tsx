@@ -5,6 +5,7 @@ const navItems = [
   { to: '/ui', label: '📊 Dashboard', end: true },
   { to: '/ui/agent', label: '🤖 Model Providers' },
   { to: '/ui/agents', label: '🧩 Agents' },
+  { to: '/ui/coding-agents', label: '💻 Coding Agents' },
   { to: '/ui/channels', label: '📡 Channels' },
   { to: '/ui/sessions', label: '👥 Sessions' },
   { to: '/ui/awp', label: '🌐 AWP' },

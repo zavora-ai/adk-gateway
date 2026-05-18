@@ -8,9 +8,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 use crate::browser_factory::AgentBrowserConfig;
+use crate::coding_agent::config::{CodingAgentsConfig, validate_backend_definition};
 use crate::mcp::McpServerConfig;
+
+// ── Config Errors ──────────────────────────────────────────────────
+
+/// Errors that can occur during configuration validation.
+#[derive(Debug, Clone, PartialEq, Error)]
+pub enum ConfigError {
+    #[error("max_iterations must be between 1 and 1000, got: {0}")]
+    InvalidMaxIterations(u32),
+}
 
 /// Top-level config — mirrors OpenClaw's `openclaw.json` structure.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,6 +82,38 @@ pub struct GatewayConfig {
     /// AWP (Agentic Web Protocol) configuration
     #[serde(default)]
     pub awp: crate::awp::AwpConfig,
+
+    /// Runner configuration (max_iterations, etc.)
+    #[serde(default)]
+    pub runner: GatewayRunnerConfig,
+
+    /// Rate limiter configuration for tool invocation throttling.
+    #[serde(default, rename = "rateLimiter")]
+    pub rate_limiter: RateLimitConfig,
+
+    /// Tool approval configuration for dangerous tool calls.
+    #[serde(default, rename = "toolApproval")]
+    pub tool_approval: ApprovalConfig,
+
+    /// Stale context detection configuration.
+    #[serde(default, rename = "staleContext")]
+    pub stale_context: StaleContextConfig,
+
+    /// Heartbeat V2 configuration (session-integrated heartbeat).
+    #[serde(default, rename = "heartbeatV2")]
+    pub heartbeat_v2: HeartbeatV2Config,
+
+    /// Multi-user support configuration.
+    #[serde(default, rename = "multiUser")]
+    pub multi_user: MultiUserConfig,
+
+    /// Health monitor configuration for periodic component health checks.
+    #[serde(default, rename = "healthMonitor")]
+    pub health_monitor: HealthMonitorConfig,
+
+    /// Coding agent subsystem configuration.
+    #[serde(default, rename = "codingAgents")]
+    pub coding_agents: CodingAgentsConfig,
 }
 
 
@@ -448,6 +491,17 @@ pub struct AgentEntry {
     /// Custom tool entries for this agent (R5.2).
     #[serde(default)]
     pub tools: Vec<CustomToolConfig>,
+    /// Per-agent max_iterations override. When set, this takes precedence over
+    /// the gateway-level `runner.maxIterations` for requests handled by this agent.
+    /// Must be within [1, 1000] if specified.
+    #[serde(default, rename = "maxIterations")]
+    pub max_iterations: Option<u32>,
+    /// Per-agent ACP (Agent Communication Protocol) configuration.
+    /// When the `acp` feature is enabled, this configures task delegation to
+    /// external coding agents (Claude Code, Codex). Ignored when `acp` feature
+    /// is not enabled.
+    #[serde(default)]
+    pub acp: Option<serde_json::Value>,
 }
 
 /// Configuration for a custom tool entry defined in agent configuration (R5.2).
@@ -474,6 +528,17 @@ pub struct ServerSettings {
     /// Graceful shutdown drain timeout in seconds (default: 30).
     #[serde(default = "default_drain_timeout_secs", rename = "drainTimeoutSecs")]
     pub drain_timeout_secs: u64,
+    /// Encryption configuration for sensitive config values.
+    #[serde(default)]
+    pub encryption: Option<EncryptionConfig>,
+}
+
+/// Configuration for config value encryption.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EncryptionConfig {
+    /// Path to the encryption key file (32 bytes raw or base64-encoded).
+    #[serde(rename = "keyFile")]
+    pub key_file: PathBuf,
 }
 
 fn default_drain_timeout_secs() -> u64 {
@@ -487,6 +552,7 @@ impl Default for ServerSettings {
             bind: BindMode::Loopback,
             auth: None,
             drain_timeout_secs: default_drain_timeout_secs(),
+            encryption: None,
         }
     }
 }
@@ -511,6 +577,253 @@ impl BindMode {
             BindMode::Tailnet => "0.0.0.0", // Tailscale handles routing
             BindMode::Custom(addr) => addr,
         }
+    }
+}
+
+// ── Rate Limit Configuration ───────────────────────────────────────
+
+/// Configuration for the sliding-window rate limiter.
+///
+/// Controls how aggressively tool invocations are throttled to prevent
+/// runaway agent loops. Each agent can have its own rate limit configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RateLimitConfig {
+    /// Maximum tool calls allowed within the sliding window (default: 10).
+    #[serde(rename = "maxCalls")]
+    pub max_calls: u32,
+    /// Sliding window duration in seconds (default: 5).
+    #[serde(rename = "windowSecs")]
+    pub window_secs: u64,
+    /// Cooldown pause duration in seconds when rate is exceeded (default: 3).
+    #[serde(rename = "cooldownSecs")]
+    pub cooldown_secs: u64,
+    /// Maximum number of rate-limit triggers before termination (default: 3).
+    #[serde(rename = "maxTriggers")]
+    pub max_triggers: u32,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            max_calls: 10,
+            window_secs: 5,
+            cooldown_secs: 3,
+            max_triggers: 3,
+        }
+    }
+}
+
+// ── Tool Approval Configuration ────────────────────────────────────
+
+/// Configuration for the tool approval flow.
+///
+/// Controls which tools require explicit user approval before execution.
+/// When `require_approval` is non-empty, it takes complete precedence over
+/// the default dangerous tool categories.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApprovalConfig {
+    /// Tool name patterns that require approval.
+    /// Supports glob-style patterns: `"fs_*"`, `"*_exec"`, `"*delete*"`.
+    /// When non-empty, these rules completely override the defaults.
+    /// When empty, defaults are used: `fs_write`, `fs_delete`, `shell_exec`, `run_command`.
+    #[serde(rename = "requireApproval")]
+    pub require_approval: Vec<String>,
+    /// Timeout in seconds before auto-reject (default: 120).
+    #[serde(rename = "timeoutSecs")]
+    pub timeout_secs: u64,
+}
+
+impl Default for ApprovalConfig {
+    fn default() -> Self {
+        Self {
+            require_approval: vec![],
+            timeout_secs: 120,
+        }
+    }
+}
+
+// ── Stale Context Configuration ────────────────────────────────────
+
+/// Configuration for the stale context detector.
+///
+/// Controls when the system considers a user's session "stale" and triggers
+/// a welcome-back message summarizing pending items and alerts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StaleContextConfig {
+    /// Idle threshold in seconds before a session is considered stale.
+    /// Default: 14400 (4 hours).
+    #[serde(rename = "idleThresholdSecs")]
+    pub idle_threshold_secs: u64,
+}
+
+impl Default for StaleContextConfig {
+    fn default() -> Self {
+        Self {
+            idle_threshold_secs: 14400,
+        }
+    }
+}
+
+// ── Heartbeat V2 Configuration ─────────────────────────────────────
+
+/// Configuration for the session-integrated Heartbeat V2 system.
+///
+/// Replaces the cron-based heartbeat with a per-user, session-aware heartbeat
+/// that runs within the user's active session context. Each paired user gets
+/// an independent heartbeat schedule.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HeartbeatV2Config {
+    /// Whether the heartbeat V2 system is enabled (default: true).
+    pub enabled: bool,
+    /// Default heartbeat interval in seconds per user (default: 3600 = 1 hour).
+    #[serde(rename = "defaultIntervalSecs")]
+    pub default_interval_secs: u64,
+    /// The heartbeat prompt injected into the session.
+    /// Should instruct the agent to reply "HEARTBEAT_OK" if nothing needs attention.
+    pub prompt: String,
+}
+
+impl Default for HeartbeatV2Config {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_interval_secs: 3600,
+            prompt: "System heartbeat check: Review the current context and check if anything needs attention. If nothing needs attention, reply with exactly HEARTBEAT_OK. If something needs attention, describe the issue clearly.".to_string(),
+        }
+    }
+}
+
+// ── Multi-User Configuration ───────────────────────────────────────
+
+/// Configuration for multi-user support.
+///
+/// Controls how multiple users are managed per channel, including
+/// per-group agent routing and default agent assignment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MultiUserConfig {
+    /// Whether multi-user support is enabled (default: true).
+    pub enabled: bool,
+    /// The default agent ID for messages without a matching routing rule.
+    #[serde(rename = "defaultAgent")]
+    pub default_agent: String,
+    /// Per-group agent routing rules.
+    #[serde(default, rename = "routingRules")]
+    pub routing_rules: Vec<GroupRoutingRule>,
+    /// Default heartbeat interval in seconds for new users (default: 3600 = 1 hour).
+    #[serde(default = "default_heartbeat_interval_secs", rename = "defaultHeartbeatIntervalSecs")]
+    pub default_heartbeat_interval_secs: u64,
+}
+
+fn default_heartbeat_interval_secs() -> u64 {
+    3600
+}
+
+impl Default for MultiUserConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_agent: "default".to_string(),
+            routing_rules: Vec::new(),
+            default_heartbeat_interval_secs: default_heartbeat_interval_secs(),
+        }
+    }
+}
+
+/// A routing rule that maps a group (and optionally a thread) to a specific agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupRoutingRule {
+    /// The group ID this rule applies to.
+    #[serde(rename = "groupId")]
+    pub group_id: String,
+    /// Optional thread ID for more specific routing.
+    #[serde(rename = "threadId")]
+    pub thread_id: Option<String>,
+    /// The agent ID to route messages to.
+    #[serde(rename = "agentId")]
+    pub agent_id: String,
+}
+
+// ── Health Monitor Configuration ───────────────────────────────────
+
+/// Configuration for the health monitor subsystem.
+///
+/// Controls periodic health checks for gateway components (channel connectivity,
+/// model reachability, session store availability) and alerting behavior.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HealthMonitorConfig {
+    /// Interval between health checks in seconds (default: 60).
+    #[serde(rename = "checkIntervalSecs")]
+    pub check_interval_secs: u64,
+    /// Number of consecutive failures before emitting an alert (default: 3).
+    #[serde(rename = "failureThreshold")]
+    pub failure_threshold: u32,
+    /// Optional webhook URL for alert delivery (POST JSON payload).
+    #[serde(rename = "alertWebhookUrl")]
+    pub alert_webhook_url: Option<String>,
+    /// Optional Telegram admin chat ID for alert delivery.
+    #[serde(rename = "alertTelegramAdmin")]
+    pub alert_telegram_admin: Option<String>,
+}
+
+impl Default for HealthMonitorConfig {
+    fn default() -> Self {
+        Self {
+            check_interval_secs: 60,
+            failure_threshold: 3,
+            alert_webhook_url: None,
+            alert_telegram_admin: None,
+        }
+    }
+}
+
+// ── Runner Configuration ───────────────────────────────────────────
+
+/// Gateway-level runner configuration.
+///
+/// Controls how the adk-runner behaves when processing requests through the gateway.
+/// The gateway default of 25 iterations is more conservative than the Runner's
+/// internal default of 100, providing a safety net for gateway-hosted agents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GatewayRunnerConfig {
+    /// Maximum iterations per request (default: 25 for gateway, Runner default: 100).
+    #[serde(rename = "maxIterations")]
+    pub max_iterations: u32,
+}
+
+impl Default for GatewayRunnerConfig {
+    fn default() -> Self {
+        Self {
+            max_iterations: 25,
+        }
+    }
+}
+
+impl GatewayRunnerConfig {
+    /// Validate that `max_iterations` is within the allowed range [1, 1000].
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_iterations < 1 || self.max_iterations > 1000 {
+            return Err(ConfigError::InvalidMaxIterations(self.max_iterations));
+        }
+        Ok(())
+    }
+
+    /// Resolve the effective `max_iterations` for a given agent.
+    ///
+    /// If the agent has a per-agent `maxIterations` override configured, that value
+    /// takes precedence. Otherwise, the gateway-level default (`runner.maxIterations`)
+    /// is used. This enables per-request differentiation when different agents need
+    /// different iteration budgets.
+    pub fn resolve_max_iterations(&self, agent_entry: Option<&AgentEntry>) -> u32 {
+        agent_entry
+            .and_then(|entry| entry.max_iterations)
+            .unwrap_or(self.max_iterations)
     }
 }
 
@@ -883,6 +1196,24 @@ pub struct CronConfig {
     pub jobs: Vec<CronJob>,
 }
 
+/// The target type for a cron job execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum CronJobTarget {
+    /// Route through the standard agent pipeline (default behavior).
+    SystemAgent,
+    /// Route to a specific custom agent by ID.
+    CustomAgent { agent_id: String },
+    /// Delegate to a registered coding agent.
+    CodingAgent { agent_id: String },
+}
+
+impl Default for CronJobTarget {
+    fn default() -> Self {
+        Self::SystemAgent
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CronJob {
     pub id: String,
@@ -894,6 +1225,13 @@ pub struct CronJob {
     /// Used for heartbeat-style tasks where "nothing to report" shouldn't ping the user.
     #[serde(default, rename = "suppressKeyword", skip_serializing_if = "Option::is_none")]
     pub suppress_keyword: Option<String>,
+    /// The target for this cron job. Defaults to `SystemAgent` (standard pipeline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<CronJobTarget>,
+    /// Optional workspace override for coding agent targets.
+    /// Specifies which workspace the coding agent should operate in for this job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1059,6 +1397,9 @@ pub struct TelemetryConfig {
     /// `{log_dir}/adk-gateway.YYYY-MM-DD.log` with daily rotation.
     #[serde(default, rename = "logDir")]
     pub log_dir: Option<String>,
+    /// Log rotation and retention configuration.
+    #[serde(default, rename = "logRotation")]
+    pub log_rotation: LogRotationConfig,
 }
 
 impl Default for TelemetryConfig {
@@ -1068,6 +1409,7 @@ impl Default for TelemetryConfig {
             otel_endpoint: None,
             metrics_enabled: false,
             log_dir: None,
+            log_rotation: LogRotationConfig::default(),
         }
     }
 }
@@ -1078,6 +1420,84 @@ pub enum LogFormat {
     #[default]
     Text,
     Json,
+    Pretty,
+}
+
+// ── Log Rotation Configuration ─────────────────────────────────────
+
+/// Configuration for log rotation and retention.
+///
+/// Controls how log files are rotated (daily, hourly, or by size) and how long
+/// they are retained before automatic deletion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LogRotationConfig {
+    /// Rotation policy: daily, hourly, or size-based (default: daily).
+    pub rotation: RotationPolicy,
+    /// Number of days to retain log files before deletion (default: 7).
+    #[serde(rename = "retentionDays")]
+    pub retention_days: u32,
+    /// Maximum file size in megabytes before rotation (default: 100).
+    #[serde(rename = "maxFileSizeMb")]
+    pub max_file_size_mb: u64,
+    /// Log output format override. When set, takes precedence over the top-level `logFormat`.
+    /// Supports `json` (structured JSON) or `pretty` (human-readable).
+    pub format: Option<LogFormat>,
+}
+
+impl Default for LogRotationConfig {
+    fn default() -> Self {
+        Self {
+            rotation: RotationPolicy::Daily,
+            retention_days: 7,
+            max_file_size_mb: 100,
+            format: None,
+        }
+    }
+}
+
+impl LogRotationConfig {
+    /// Determine which log files should be deleted based on retention policy.
+    ///
+    /// Returns paths of files whose creation date is more than `retention_days`
+    /// days before `now`. Files within the retention window are never returned.
+    pub fn files_to_delete(&self, files: &[LogFileInfo], now: chrono::DateTime<chrono::Utc>) -> Vec<std::path::PathBuf> {
+        let retention_duration = chrono::Duration::days(self.retention_days as i64);
+        let cutoff = now - retention_duration;
+
+        files
+            .iter()
+            .filter(|f| f.created_at < cutoff)
+            .map(|f| f.path.clone())
+            .collect()
+    }
+}
+
+/// Rotation policy for log files.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RotationPolicy {
+    /// Rotate log files daily (default).
+    #[default]
+    Daily,
+    /// Rotate log files hourly.
+    Hourly,
+    /// Rotate log files when they exceed a size threshold.
+    Size {
+        /// Maximum file size in bytes before rotation.
+        max_bytes: u64,
+    },
+}
+
+/// Metadata about a log file used for retention decisions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogFileInfo {
+    /// Path to the log file.
+    pub path: std::path::PathBuf,
+    /// When the log file was created.
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Size of the log file in bytes.
+    pub size_bytes: u64,
 }
 
 // ── Graph Workflows ────────────────────────────────────────────────
@@ -1220,6 +1640,23 @@ pub fn load_config(path: &Path) -> anyhow::Result<GatewayConfig> {
     let config: GatewayConfig = json5::from_str(&expanded)
         .with_context(|| format!("failed to parse config file: {}", path.display()))?;
 
+    // Validate runner configuration (max_iterations bounds, etc.)
+    config.runner.validate().with_context(|| {
+        format!("invalid runner configuration in {}", path.display())
+    })?;
+
+    // Validate coding agent backend definitions
+    for backend in &config.coding_agents.backends {
+        let errors = validate_backend_definition(backend);
+        if !errors.is_empty() {
+            tracing::warn!(
+                agent_type = %backend.agent_type,
+                errors = ?errors,
+                "invalid coding agent backend definition, skipping"
+            );
+        }
+    }
+
     tracing::info!(?path, "loaded configuration");
     Ok(config)
 }
@@ -1284,5 +1721,107 @@ mod tests {
         let expanded = expand_env_vars(input);
         assert!(expanded.contains("secret123"));
         unsafe { std::env::remove_var("TEST_TOKEN_XYZ") };
+    }
+
+    #[test]
+    fn test_runner_config_default() {
+        let cfg = GatewayRunnerConfig::default();
+        assert_eq!(cfg.max_iterations, 25);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_runner_config_validation_boundaries() {
+        // Valid boundaries
+        let cfg = GatewayRunnerConfig { max_iterations: 1 };
+        assert!(cfg.validate().is_ok());
+
+        let cfg = GatewayRunnerConfig { max_iterations: 1000 };
+        assert!(cfg.validate().is_ok());
+
+        // Invalid: below minimum
+        let cfg = GatewayRunnerConfig { max_iterations: 0 };
+        assert!(matches!(cfg.validate(), Err(ConfigError::InvalidMaxIterations(0))));
+
+        // Invalid: above maximum
+        let cfg = GatewayRunnerConfig { max_iterations: 1001 };
+        assert!(matches!(cfg.validate(), Err(ConfigError::InvalidMaxIterations(1001))));
+    }
+
+    #[test]
+    fn test_runner_resolve_max_iterations_no_agent() {
+        let cfg = GatewayRunnerConfig { max_iterations: 25 };
+        // No agent entry → uses gateway default
+        assert_eq!(cfg.resolve_max_iterations(None), 25);
+    }
+
+    #[test]
+    fn test_runner_resolve_max_iterations_agent_without_override() {
+        let cfg = GatewayRunnerConfig { max_iterations: 25 };
+        let agent = AgentEntry {
+            id: "test-agent".into(),
+            default: false,
+            workspace: None,
+            model: None,
+            skills: vec![],
+            browser: None,
+            tools: vec![],
+            max_iterations: None, // No per-agent override
+            acp: None,
+        };
+        // Agent without override → uses gateway default
+        assert_eq!(cfg.resolve_max_iterations(Some(&agent)), 25);
+    }
+
+    #[test]
+    fn test_runner_resolve_max_iterations_agent_with_override() {
+        let cfg = GatewayRunnerConfig { max_iterations: 25 };
+        let agent = AgentEntry {
+            id: "heavy-agent".into(),
+            default: false,
+            workspace: None,
+            model: None,
+            skills: vec![],
+            browser: None,
+            tools: vec![],
+            max_iterations: Some(50), // Per-agent override
+            acp: None,
+        };
+        // Agent with override → uses agent's value
+        assert_eq!(cfg.resolve_max_iterations(Some(&agent)), 50);
+    }
+
+    #[test]
+    fn test_runner_config_deserialization() {
+        let json = r#"{ "runner": { "maxIterations": 42 } }"#;
+        let cfg: GatewayConfig = json5::from_str(json).unwrap();
+        assert_eq!(cfg.runner.max_iterations, 42);
+    }
+
+    #[test]
+    fn test_agent_entry_max_iterations_deserialization() {
+        let json = r#"{
+            "agents": {
+                "list": [{
+                    "id": "research",
+                    "maxIterations": 100
+                }]
+            }
+        }"#;
+        let cfg: GatewayConfig = json5::from_str(json).unwrap();
+        assert_eq!(cfg.agents.list[0].max_iterations, Some(100));
+    }
+
+    #[test]
+    fn test_agent_entry_no_max_iterations_deserialization() {
+        let json = r#"{
+            "agents": {
+                "list": [{
+                    "id": "simple"
+                }]
+            }
+        }"#;
+        let cfg: GatewayConfig = json5::from_str(json).unwrap();
+        assert_eq!(cfg.agents.list[0].max_iterations, None);
     }
 }

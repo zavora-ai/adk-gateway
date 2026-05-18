@@ -687,6 +687,7 @@ mod tests {
     use crate::tool_registry::ToolRegistry;
     use crate::webhook::WebhookHandler;
     use arc_swap::ArcSwap;
+    use dashmap::DashMap;
     use std::path::PathBuf;
     use tokio::sync::RwLock;
     use tokio_util::sync::CancellationToken;
@@ -756,6 +757,11 @@ mod tests {
             active_requests: Arc::new(DashMap::new()),
             progress_messages: Arc::new(DashMap::new()),
             task_log: Arc::new(crate::task_log::TaskLogStore::open(std::path::Path::new(":memory:")).unwrap()),
+            coding_agent_registry: None,
+            coding_agent_delegator: None,
+            coding_agent_queue: None,
+            coding_agent_cost_tracker: None,
+            coding_agent_history: None,
         })
     }
 

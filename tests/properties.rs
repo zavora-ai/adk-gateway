@@ -5,6 +5,7 @@ mod properties {
     mod browser_domain_props;
     mod channel_phase2_props;
     mod channel_props;
+    mod config_encryption_props;
     mod config_props;
     mod config_redaction_props;
     mod cron_props;
@@ -13,13 +14,19 @@ mod properties {
     mod event_stream_props;
     mod graph_agent_node_props;
     mod graph_props;
+    mod health_monitor_props;
+    mod heartbeat_v2_props;
     mod hot_reload_props;
     mod kg_props;
+    mod log_rotation_props;
+    mod max_iterations_props;
     mod mcp_props;
     mod metrics_props;
+    mod multi_user_props;
     mod pairing_props;
     mod plugin_props;
     mod process_manager_props;
+    mod rate_limiter_props;
     mod rbac_bridge_props;
     mod routing_props;
     mod session_backend_props;
@@ -27,6 +34,8 @@ mod properties {
     mod shutdown_props;
     mod skill_props;
     mod sqlrite_props;
+    mod stale_context_props;
+    mod tool_approval_props;
     mod tool_registry_props;
     mod webhook_props;
     mod wiring_props;
