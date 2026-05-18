@@ -931,7 +931,13 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
     let app = gateway_routes::build_router(&state, webhook_handler);
     let bind_addr = format!("{}:{}", config.gateway.bind.to_addr(), port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    tracing::info!(addr = %bind_addr, "HTTP server listening");
+    const ADK_VERSION: &str = "0.8.4";
+    tracing::info!(
+        gateway = env!("CARGO_PKG_VERSION"),
+        adk_rust = ADK_VERSION,
+        addr = %bind_addr,
+        "HTTP server listening"
+    );
     tracing::info!("📊 Control panel: http://{bind_addr}/ui");
 
     // ── sd_notify(READY=1) — Systemd readiness signaling ───────────────────
