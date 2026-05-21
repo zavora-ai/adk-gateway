@@ -1417,6 +1417,67 @@ pub fn build_coding_agent_list_tool(
     ))
 }
 
+/// Build the coding agent task status tool — check if a delegated task is done.
+pub fn build_coding_agent_task_status_tool(
+    task_history: Arc<crate::coding_agent::history::TaskHistory>,
+    history_db: Arc<crate::coding_agent::history_db::PersistentTaskHistory>,
+) -> Arc<dyn adk_core::Tool> {
+    Arc::new(FunctionTool::new(
+        "coding_agent_task_status",
+        "Check the status of a previously delegated coding agent task. Returns the current state (queued, running, completed, failed, cancelled) and the output/result if completed. Use this to check on tasks you delegated with delegate_to_coding_agent.",
+        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+            let task_history = task_history.clone();
+            let history_db = history_db.clone();
+            async move {
+                let task_id = args.get("task_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| adk_core::AdkError::tool("'task_id' field is required"))?;
+
+                // Try persistent DB first, then in-memory
+                let task = history_db.get_task(&task_id.to_string())
+                    .or_else(|| task_history.get_task(&task_id.to_string()));
+
+                match task {
+                    Some(entry) => {
+                        let (status, output, error) = match &entry.state {
+                            crate::coding_agent::models::TaskState::Queued { .. } => {
+                                ("queued".to_string(), None, None)
+                            }
+                            crate::coding_agent::models::TaskState::Running { progress_percent, .. } => {
+                                ("running".to_string(), progress_percent.map(|p| format!("{}% complete", p)), None)
+                            }
+                            crate::coding_agent::models::TaskState::Completed { result, .. } => {
+                                ("completed".to_string(), Some(result.output.clone()), None)
+                            }
+                            crate::coding_agent::models::TaskState::Failed { error, .. } => {
+                                let err_msg = format!("{:?}", error);
+                                ("failed".to_string(), None, Some(err_msg))
+                            }
+                            crate::coding_agent::models::TaskState::Cancelled { reason, .. } => {
+                                ("cancelled".to_string(), None, Some(format!("{:?}", reason)))
+                            }
+                        };
+
+                        Ok(serde_json::json!({
+                            "task_id": task_id,
+                            "agent_id": entry.agent_id,
+                            "description": entry.description,
+                            "status": status,
+                            "output": output,
+                            "error": error,
+                        }))
+                    }
+                    None => Ok(serde_json::json!({
+                        "task_id": task_id,
+                        "status": "not_found",
+                        "message": "Task not found. It may have expired from history or the ID is incorrect."
+                    })),
+                }
+            }
+        },
+    ))
+}
+
 fn fs_pwd_tool(root: PathBuf) -> FunctionTool {
     FunctionTool::new(
         "fs_pwd",

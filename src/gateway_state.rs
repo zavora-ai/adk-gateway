@@ -793,6 +793,14 @@ pub async fn build(
         agent_management_tools.push(list_tool);
         tracing::info!("built coding agent list tool");
     }
+    if let (Some(ref ca_history), Some(ref ca_history_db)) = (&coding_agent_history, &coding_agent_history_db) {
+        let status_tool = crate::executable_tools::build_coding_agent_task_status_tool(
+            ca_history.clone(),
+            ca_history_db.clone(),
+        );
+        agent_management_tools.push(status_tool);
+        tracing::info!("built coding agent task status tool");
+    }
 
     Ok(GatewayState {
         config: Arc::new(ArcSwap::from_pointee(config.clone())),
