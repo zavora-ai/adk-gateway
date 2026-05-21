@@ -38,6 +38,8 @@ pub struct CodingAgentPanelState {
     pub delegator: Arc<TaskDelegator>,
     pub cost_tracker: Arc<CostTracker>,
     pub task_history: Arc<TaskHistory>,
+    pub history_db: Arc<crate::coding_agent::history_db::PersistentTaskHistory>,
+    pub session_pool: Arc<crate::coding_agent::acp_client::AcpSessionPool>,
 }
 
 impl std::fmt::Debug for CodingAgentPanelState {
@@ -61,7 +63,10 @@ pub struct RegisterAgentRequest {
     pub id: String,
     #[serde(rename = "backendType")]
     pub backend_type: String,
+    #[serde(default)]
     pub endpoint: String,
+    #[serde(default)]
+    pub transport: Option<crate::coding_agent::config::AgentTransport>,
     pub workspaces: Vec<String>,
     #[serde(rename = "timeoutSecs")]
     pub timeout_secs: Option<u64>,
@@ -70,6 +75,7 @@ pub struct RegisterAgentRequest {
     #[serde(rename = "monthlyBudgetUsd")]
     pub monthly_budget_usd: Option<f64>,
     pub alias: Option<String>,
+    pub auth: Option<crate::coding_agent::config::AgentAuthConfig>,
 }
 
 /// Request body for delegating a task from the UI.
@@ -217,6 +223,7 @@ pub(crate) async fn register_coding_agent(
         id: payload.id.clone(),
         backend_type: payload.backend_type,
         endpoint: payload.endpoint,
+        transport: payload.transport,
         workspaces: payload
             .workspaces
             .into_iter()
@@ -226,14 +233,30 @@ pub(crate) async fn register_coding_agent(
         cost_cap_usd: payload.cost_cap_usd,
         monthly_budget_usd: payload.monthly_budget_usd,
         alias: payload.alias,
-        auth: None,
+        auth: payload.auth,
     };
 
-    match ca_state.registry.register_agent(config) {
-        Ok(()) => Json(serde_json::json!({
-            "ok": true,
-            "message": format!("Agent '{}' registered successfully", payload.id)
-        })),
+    match ca_state.registry.register_agent(config.clone()) {
+        Ok(()) => {
+            // Persist to config file so agent survives restarts
+            if let Some(config_path) = &state.config_path {
+                if let Err(e) = persist_agent_to_config(config_path, &config) {
+                    tracing::warn!(
+                        agent_id = %payload.id,
+                        error = %e,
+                        "Agent registered in memory but config persistence failed"
+                    );
+                    return Json(serde_json::json!({
+                        "ok": true,
+                        "message": format!("Agent '{}' registered but may not persist across restarts: {}", payload.id, e)
+                    }));
+                }
+            }
+            Json(serde_json::json!({
+                "ok": true,
+                "message": format!("Agent '{}' registered successfully", payload.id)
+            }))
+        }
         Err(e) => Json(serde_json::json!({
             "ok": false,
             "message": format!("Failed to register agent: {}", e)
@@ -254,10 +277,18 @@ pub(crate) async fn unregister_coding_agent(
     };
 
     match ca_state.registry.unregister_agent(&id) {
-        Ok(_) => Json(serde_json::json!({
-            "ok": true,
-            "message": format!("Agent '{}' unregistered successfully", id)
-        })),
+        Ok(_) => {
+            // Also remove from config file so it doesn't come back on restart
+            if let Some(config_path) = &state.config_path {
+                if let Err(e) = remove_agent_from_config(config_path, &id) {
+                    tracing::warn!(agent_id = %id, error = %e, "Agent unregistered but config persistence failed");
+                }
+            }
+            Json(serde_json::json!({
+                "ok": true,
+                "message": format!("Agent '{}' unregistered successfully", id)
+            }))
+        }
         Err(e) => Json(serde_json::json!({
             "ok": false,
             "message": format!("Failed to unregister agent: {}", e)
@@ -287,7 +318,15 @@ pub(crate) async fn get_agent_tasks(
     }
 
     let limit = query.limit.unwrap_or(50);
-    let tasks = ca_state.task_history.get_recent(&id, limit);
+    // Try persistent DB first, fall back to in-memory
+    let tasks = {
+        let db_tasks = ca_state.history_db.get_recent(&id, limit);
+        if db_tasks.is_empty() {
+            ca_state.task_history.get_recent(&id, limit)
+        } else {
+            db_tasks
+        }
+    };
 
     let task_entries: Vec<serde_json::Value> = tasks
         .into_iter()
@@ -329,7 +368,7 @@ pub(crate) async fn get_agent_task_detail(
         }));
     }
 
-    let Some(task) = ca_state.task_history.get_task(&task_id) else {
+    let Some(task) = ca_state.history_db.get_task(&task_id).or_else(|| ca_state.task_history.get_task(&task_id)) else {
         return Json(serde_json::json!({
             "ok": false,
             "message": format!("Task '{}' not found", task_id)
@@ -506,6 +545,7 @@ pub(crate) async fn update_agent_config(
         id: current_agent.config.id.clone(),
         backend_type: current_agent.config.backend_type.clone(),
         endpoint: current_agent.config.endpoint.clone(),
+        transport: current_agent.config.transport.clone(),
         workspaces: payload
             .workspaces
             .map(|ws| ws.into_iter().map(std::path::PathBuf::from).collect())
@@ -537,4 +577,170 @@ pub(crate) async fn update_agent_config(
             "message": format!("Failed to re-register agent with updated config: {}", e)
         })),
     }
+}
+
+// ── Connect / Disconnect ───────────────────────────────────────────
+
+/// POST /ui/api/coding-agents/:id/connect — start an ACP session for the agent.
+pub(crate) async fn connect_agent(
+    State(state): State<Arc<ControlPanelState>>,
+    Path(id): Path<String>,
+) -> Json<serde_json::Value> {
+    let Some(ca_state) = state.coding_agent_state.as_ref() else {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": "Coding agent subsystem is not enabled"
+        }));
+    };
+
+    let Some(agent) = ca_state.registry.get_agent(&id) else {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Agent '{}' not found", id)
+        }));
+    };
+
+    // Check if agent has stdio transport
+    if agent.config.transport.is_none() {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": "Agent has no stdio transport configured. Cannot connect."
+        }));
+    }
+
+    // Try to create/get a session (this spawns the process)
+    match ca_state.session_pool.get_or_create(&id, &agent.config).await {
+        Ok(_) => Json(serde_json::json!({
+            "ok": true,
+            "message": format!("Agent '{}' connected successfully", id)
+        })),
+        Err(e) => Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Failed to connect agent '{}': {:?}", id, e)
+        })),
+    }
+}
+
+/// POST /ui/api/coding-agents/:id/disconnect — close the ACP session for the agent.
+pub(crate) async fn disconnect_agent(
+    State(state): State<Arc<ControlPanelState>>,
+    Path(id): Path<String>,
+) -> Json<serde_json::Value> {
+    let Some(ca_state) = state.coding_agent_state.as_ref() else {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": "Coding agent subsystem is not enabled"
+        }));
+    };
+
+    if !ca_state.session_pool.has_session(&id) {
+        return Json(serde_json::json!({
+            "ok": false,
+            "message": format!("Agent '{}' has no active session", id)
+        }));
+    }
+
+    // Close the session (kills the process)
+    ca_state.session_pool.close_session(&id).await;
+
+    // Update status
+    let _ = ca_state.registry.update_status(
+        &id,
+        crate::coding_agent::status::AgentConnectionStatus::Disconnected {
+            since: chrono::Utc::now(),
+        },
+    );
+
+    Json(serde_json::json!({
+        "ok": true,
+        "message": format!("Agent '{}' disconnected", id)
+    }))
+}
+
+// ── Persistence Helper ─────────────────────────────────────────────
+
+/// Persist a new agent configuration to the gateway config file.
+///
+/// Reads the existing config JSON, appends the agent to `codingAgents.agents[]`,
+/// and writes it back. This ensures agents survive gateway restarts.
+fn persist_agent_to_config(
+    config_path: &std::path::Path,
+    agent_config: &CodingAgentInstanceConfig,
+) -> Result<(), String> {
+    let raw = std::fs::read_to_string(config_path)
+        .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+    let mut config_value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse config file: {}", e))?;
+
+    // Ensure codingAgents.agents array exists
+    let coding_agents = config_value
+        .as_object_mut()
+        .ok_or("Config is not a JSON object")?
+        .entry("codingAgents")
+        .or_insert_with(|| serde_json::json!({"enabled": true, "agents": []}));
+
+    let agents_arr = coding_agents
+        .as_object_mut()
+        .ok_or("codingAgents is not an object")?
+        .entry("agents")
+        .or_insert_with(|| serde_json::json!([]));
+
+    let arr = agents_arr
+        .as_array_mut()
+        .ok_or("codingAgents.agents is not an array")?;
+
+    // Remove existing agent with same ID (in case of re-registration)
+    arr.retain(|v| v.get("id").and_then(|id| id.as_str()) != Some(&agent_config.id));
+
+    // Serialize and append the new agent config
+    let agent_value = serde_json::to_value(agent_config)
+        .map_err(|e| format!("Failed to serialize agent config: {}", e))?;
+    arr.push(agent_value);
+
+    // Write back
+    let output = serde_json::to_string_pretty(&config_value)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+    std::fs::write(config_path, output)
+        .map_err(|e| format!("Failed to write config file: {}", e))?;
+
+    tracing::info!(agent_id = %agent_config.id, "Agent config persisted to disk");
+    Ok(())
+}
+
+/// Remove an agent from the persisted config file.
+fn remove_agent_from_config(
+    config_path: &std::path::Path,
+    agent_id: &str,
+) -> Result<(), String> {
+    let raw = std::fs::read_to_string(config_path)
+        .map_err(|e| format!("Failed to read config file: {}", e))?;
+
+    let mut config_value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Failed to parse config file: {}", e))?;
+
+    let Some(coding_agents) = config_value.get_mut("codingAgents") else {
+        return Ok(()); // No codingAgents section — nothing to remove
+    };
+
+    let Some(agents_arr) = coding_agents.get_mut("agents").and_then(|v| v.as_array_mut()) else {
+        return Ok(()); // No agents array
+    };
+
+    let before = agents_arr.len();
+    agents_arr.retain(|v| v.get("id").and_then(|id| id.as_str()) != Some(agent_id));
+
+    if agents_arr.len() == before {
+        return Ok(()); // Agent wasn't in config
+    }
+
+    let output = serde_json::to_string_pretty(&config_value)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+    std::fs::write(config_path, output)
+        .map_err(|e| format!("Failed to write config file: {}", e))?;
+
+    tracing::info!(agent_id = %agent_id, "Agent removed from config file");
+    Ok(())
 }

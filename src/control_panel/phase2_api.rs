@@ -744,6 +744,7 @@ pub(crate) async fn get_system_info(
         "ok": true,
         "data": {
             "version": env!("CARGO_PKG_VERSION"),
+            "adk_rust_version": env!("ADK_RUST_VERSION"),
             "uptime_secs": uptime_secs,
             "config_path": config_path,
             "drain_timeout_secs": config.gateway.drain_timeout_secs,

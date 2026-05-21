@@ -321,6 +321,7 @@ export interface LogFileInfo {
 // Deployment Status (Task 22)
 export interface SystemInfo {
   version: string;
+  adk_rust_version?: string;
   uptime_secs: number;
   build_features: string[];
   config_path: string;
@@ -409,6 +410,7 @@ export interface CodingAgentSummary {
   backend_type: string;
   display_name: string;
   connection_status: CodingAgentConnectionStatus;
+  status_message: string | null;
   last_task_at: string | null;
   workspaces: string[];
 }

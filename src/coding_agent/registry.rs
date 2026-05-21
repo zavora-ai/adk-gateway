@@ -217,6 +217,13 @@ impl CodingAgentRegistry {
 
         // Only emit event if status actually changed
         if previous_status != new_status {
+            let status_label = match &new_status {
+                AgentConnectionStatus::Connected => "connected".to_string(),
+                AgentConnectionStatus::Disconnected { .. } => "disconnected".to_string(),
+                AgentConnectionStatus::Error { message, .. } => format!("error: {}", message),
+                AgentConnectionStatus::Unknown => "unknown".to_string(),
+            };
+
             agent.status = new_status.clone();
 
             let event = AgentStatusEvent {
@@ -231,6 +238,7 @@ impl CodingAgentRegistry {
 
             info!(
                 agent_id = %agent_id,
+                status = %status_label,
                 "Agent status updated"
             );
         }

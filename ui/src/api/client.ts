@@ -17,10 +17,36 @@ const BASE = '/ui/api';
 
 /** Normalize a backend status value to a valid CodingAgentConnectionStatus. */
 function normalizeStatus(status: unknown): 'connected' | 'disconnected' | 'error' {
-  const s = String(status ?? '').toLowerCase();
-  if (s === 'connected' || s === 'running' || s === 'active') return 'connected';
-  if (s === 'error' || s === 'failed') return 'error';
+  if (status == null) return 'disconnected';
+  // Handle string values
+  if (typeof status === 'string') {
+    const s = status.toLowerCase();
+    if (s === 'connected' || s === 'running' || s === 'active') return 'connected';
+    if (s === 'error' || s === 'failed') return 'error';
+    if (s === 'disconnected') return 'disconnected';
+    return 'disconnected'; // "unknown" and others
+  }
+  // Handle object variants: {"disconnected": {...}} or {"error": {...}}
+  if (typeof status === 'object') {
+    if ('connected' in (status as object)) return 'connected';
+    if ('error' in (status as object)) return 'error';
+    if ('disconnected' in (status as object)) return 'disconnected';
+  }
   return 'disconnected';
+}
+
+/** Extract error message from status object if present. */
+function extractStatusMessage(status: unknown): string | null {
+  if (status == null || typeof status !== 'object') return null;
+  const obj = status as Record<string, unknown>;
+  if ('error' in obj && typeof obj.error === 'object' && obj.error !== null) {
+    return (obj.error as Record<string, unknown>).message as string ?? null;
+  }
+  if ('disconnected' in obj && typeof obj.disconnected === 'object' && obj.disconnected !== null) {
+    const since = (obj.disconnected as Record<string, unknown>).since as string;
+    return since ? `Since ${new Date(since).toLocaleString()}` : null;
+  }
+  return null;
 }
 
 /** Typed fetch wrapper for the gateway JSON API. */
@@ -231,6 +257,7 @@ export const api = {
         backend_type: (a.backendType as string) ?? (a.backend_type as string) ?? '',
         display_name: (a.displayName as string) ?? (a.display_name as string) ?? (a.backendType as string) ?? '',
         connection_status: normalizeStatus(a.status),
+        status_message: extractStatusMessage(a.status),
         last_task_at: (a.lastSuccessfulTask as string) ?? (a.last_task_at as string) ?? null,
         workspaces: (a.workspaces as string[]) ?? [],
       }));
@@ -249,6 +276,7 @@ export const api = {
         backend_type: (a.backendType as string) ?? (a.backend_type as string) ?? '',
         display_name: (a.displayName as string) ?? (a.display_name as string) ?? (a.backendType as string) ?? '',
         connection_status: normalizeStatus(a.status),
+        status_message: extractStatusMessage(a.status),
         last_task_at: (a.lastSuccessfulTask as string) ?? (a.last_task_at as string) ?? null,
         workspaces: (a.workspaces as string[]) ?? [],
         endpoint: (a.endpoint as string) ?? '',
@@ -261,10 +289,10 @@ export const api = {
     }
     return { ok: false, message: raw.message || 'Failed to load agent' };
   },
-  registerCodingAgent: async (payload: AgentRegistrationPayload): Promise<ApiResponse<CodingAgentSummary>> => {
+  registerCodingAgent: async (payload: AgentRegistrationPayload, transport?: { type: string; command: string; args: string[]; env: Record<string, string> }): Promise<ApiResponse<CodingAgentSummary>> => {
     // Transform to match backend's expected camelCase format with required 'id' field
     const id = payload.alias || `${payload.backend_type}-${Date.now()}`;
-    const body = {
+    const body: Record<string, unknown> = {
       id,
       backendType: payload.backend_type,
       endpoint: payload.endpoint || `acp://${payload.backend_type}`,
@@ -274,10 +302,20 @@ export const api = {
       monthlyBudgetUsd: null,
       alias: payload.alias || null,
     };
+    if (transport) {
+      body.transport = transport;
+    }
+    if (payload.auth?.credentials) {
+      body.auth = { credentials: payload.auth.credentials };
+    }
     return request<CodingAgentSummary>('/coding-agents', { method: 'POST', body: JSON.stringify(body) });
   },
   updateCodingAgent: (id: string, config: AgentConfigUpdate) =>
-    request<void>(`/coding-agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(config) }),
+    request<void>(`/coding-agents/${encodeURIComponent(id)}/config`, { method: 'PUT', body: JSON.stringify({
+      costCapUsd: config.cost_cap_usd,
+      timeoutSecs: config.timeout_secs,
+      workspaces: config.workspaces,
+    }) }),
   deleteCodingAgent: (id: string) =>
     request<void>(`/coding-agents/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
@@ -317,8 +355,24 @@ export const api = {
     }),
 
   // Coding Agent Cost
-  codingAgentCosts: (agentId: string) =>
-    request<AgentCostStats>(`/coding-agents/${encodeURIComponent(agentId)}/costs`),
+  codingAgentCosts: async (agentId: string): Promise<ApiResponse<AgentCostStats>> => {
+    const res = await request<unknown>(`/coding-agents/${encodeURIComponent(agentId)}/costs`);
+    const raw = res as unknown as { ok: boolean; data?: Record<string, unknown>; message?: string };
+    if (raw.ok && raw.data) {
+      const d = raw.data;
+      const stats: AgentCostStats = {
+        agent_id: (d.agentId as string) ?? (d.agent_id as string) ?? agentId,
+        total_input_tokens: (d.totalInputTokens as number) ?? (d.total_input_tokens as number) ?? 0,
+        total_output_tokens: (d.totalOutputTokens as number) ?? (d.total_output_tokens as number) ?? 0,
+        estimated_total_cost_usd: (d.estimatedTotalCostUsd as number) ?? (d.estimated_total_cost_usd as number) ?? 0,
+        task_count: (d.taskCount as number) ?? (d.task_count as number) ?? 0,
+        period_start: (d.periodStart as string) ?? (d.period_start as string) ?? new Date().toISOString(),
+        period_end: (d.periodEnd as string) ?? (d.period_end as string) ?? new Date().toISOString(),
+      };
+      return { ok: true, data: stats };
+    }
+    return { ok: false, message: raw.message || 'Failed to load cost data' };
+  },
 
   // Coding Agent Onboarding
   codingAgentBackends: async (): Promise<ApiResponse<CodingAgentBackend[]>> => {

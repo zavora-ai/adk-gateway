@@ -35,7 +35,8 @@ export default function AgentDetailLayout() {
   );
 
   const tabs = [
-    { to: `/ui/coding-agents/${agentId}`, label: 'Tasks' },
+    { to: `/ui/coding-agents/${agentId}`, label: 'Overview' },
+    { to: `/ui/coding-agents/${agentId}/tasks`, label: 'Tasks' },
     { to: `/ui/coding-agents/${agentId}/costs`, label: 'Costs' },
     { to: `/ui/coding-agents/${agentId}/new-task`, label: 'New Task' },
     { to: `/ui/coding-agents/${agentId}/settings`, label: 'Settings' },

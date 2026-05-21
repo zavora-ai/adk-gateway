@@ -304,6 +304,12 @@ export default function Dashboard() {
               <div className="text-xs text-gray-500 uppercase">Version</div>
               <div className="text-sm font-mono font-medium">{systemInfo.version}</div>
             </div>
+            {systemInfo.adk_rust_version && (
+            <div>
+              <div className="text-xs text-gray-500 uppercase">ADK Runtime</div>
+              <div className="text-sm font-mono font-medium">{systemInfo.adk_rust_version}</div>
+            </div>
+            )}
             <div>
               <div className="text-xs text-gray-500 uppercase">Uptime</div>
               <div className="text-sm font-medium">{formatUptime(systemInfo.uptime_secs)}</div>

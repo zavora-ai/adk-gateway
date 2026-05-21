@@ -3,6 +3,16 @@
 Track ongoing work, tasks, and goals mentioned by the user.
 The agent updates this as projects are discussed.
 
+## Developer Workspace
+
+All projects live under `/Users/jameskaranja/Developer/projects/`. Use this path with filesystem tools to browse, read, and understand project structures.
+
+Key projects:
+- **adk-gateway** — `/Users/jameskaranja/Developer/projects/adk-gateway` — Multi-channel AI gateway (this project)
+- **adk-rust** — `/Users/jameskaranja/Developer/projects/adk-rust` — ADK framework (Rust)
+
+When the user asks about code, files, or projects, use `fs_list` and `fs_read` with absolute paths under `/Users/jameskaranja/Developer/projects/`.
+
 ## Format
 
 Each project entry should include:

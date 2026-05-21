@@ -559,7 +559,7 @@ pub async fn build(
     tracing::info!(path = %task_log_path.display(), "task log store initialized");
 
     // ── Coding agent subsystem initialization ──────────────────────
-    let (coding_agent_registry, coding_agent_delegator, coding_agent_queue, coding_agent_cost_tracker, coding_agent_history) =
+    let (coding_agent_registry, coding_agent_delegator, coding_agent_queue, coding_agent_cost_tracker, coding_agent_history, coding_agent_history_db, coding_agent_session_pool) =
         if config.coding_agents.enabled {
             tracing::info!("coding agent subsystem enabled, initializing components");
 
@@ -589,9 +589,19 @@ pub async fn build(
             }
             tracing::info!("coding agent cost tracker initialized");
 
-            // Create task history (200 entries per agent)
+            // Create task history (in-memory + SQLite persistence)
             let ca_history = Arc::new(TaskHistory::new());
-            tracing::info!("coding agent task history initialized");
+            let ca_history_db_path = config_path.parent().unwrap_or(std::path::Path::new(".")).join("coding_agent_tasks.db");
+            let ca_history_db = Arc::new(
+                crate::coding_agent::history_db::PersistentTaskHistory::open(&ca_history_db_path)
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, "failed to open coding agent history DB, using in-memory only");
+                        // Fallback: open in-memory
+                        crate::coding_agent::history_db::PersistentTaskHistory::open(std::path::Path::new(":memory:"))
+                            .expect("in-memory DB should always open")
+                    })
+            );
+            tracing::info!("coding agent task history initialized (persistent)");
 
             // Create task delegator wiring registry, queue, and cost tracker
             let ca_delegator = Arc::new(TaskDelegator::new(
@@ -601,11 +611,19 @@ pub async fn build(
             ));
             tracing::info!("coding agent task delegator initialized");
 
+            // Create ACP session pool for stdio-based agents (shared with panel state)
+            let ca_session_pool = Arc::new(
+                crate::coding_agent::acp_client::AcpSessionPool::new(ca_registry.clone())
+            );
+
             // Create TaskExecutor with ACP-backed agent executor and spawn its background loop
             let ca_executor = {
                 use crate::coding_agent::executor::{AcpAgentExecutor, TaskExecutor, TaskHistory as ExecutorTaskHistory};
 
-                let agent_executor = Arc::new(AcpAgentExecutor::new());
+                let agent_executor = Arc::new(AcpAgentExecutor::with_session_pool(
+                    ca_registry.clone(),
+                    ca_session_pool.clone(),
+                ));
                 let executor_history = Arc::new(ExecutorTaskHistory::new(200));
                 let executor = Arc::new(TaskExecutor::new(
                     ca_queue.clone(),
@@ -629,16 +647,24 @@ pub async fn build(
             // Keep executor alive by storing in a variable (it's referenced by the spawned task)
             let _executor = ca_executor;
 
+            // Spawn the health monitor to periodically probe agent endpoints
+            let _health_monitor = crate::coding_agent::health_monitor::spawn_health_monitor(
+                ca_registry.clone(),
+                crate::coding_agent::health_monitor::HealthMonitorConfig::default(),
+            );
+
             (
                 Some(ca_registry),
                 Some(ca_delegator),
                 Some(ca_queue),
                 Some(ca_cost_tracker),
                 Some(ca_history),
+                Some(ca_history_db),
+                Some(ca_session_pool),
             )
         } else {
             tracing::debug!("coding agent subsystem disabled");
-            (None, None, None, None, None)
+            (None, None, None, None, None, None, None)
         };
 
     // Finalize control panel with AWP state and other subsystem references
@@ -662,14 +688,16 @@ pub async fn build(
         control_panel_builder = control_panel_builder
             .with_coding_agent_registry(ca_registry.clone());
     }
-    if let (Some(ref ca_registry), Some(ref ca_delegator), Some(ref ca_cost_tracker), Some(ref ca_history)) =
-        (&coding_agent_registry, &coding_agent_delegator, &coding_agent_cost_tracker, &coding_agent_history)
+    if let (Some(ref ca_registry), Some(ref ca_delegator), Some(ref ca_cost_tracker), Some(ref ca_history), Some(ref ca_history_db), Some(ref ca_session_pool)) =
+        (&coding_agent_registry, &coding_agent_delegator, &coding_agent_cost_tracker, &coding_agent_history, &coding_agent_history_db, &coding_agent_session_pool)
     {
         let ca_panel_state = crate::control_panel::coding_agents::CodingAgentPanelState {
             registry: ca_registry.clone(),
             delegator: ca_delegator.clone(),
             cost_tracker: ca_cost_tracker.clone(),
             task_history: ca_history.clone(),
+            history_db: ca_history_db.clone(),
+            session_pool: ca_session_pool.clone(),
         };
         control_panel_builder = control_panel_builder.with_coding_agent_state(ca_panel_state);
     }
@@ -718,6 +746,22 @@ pub async fn build(
     let channel_tools = crate::executable_tools::build_channel_tools(channel_map.clone());
     tracing::info!("built {} channel tools", channel_tools.len());
     agent_management_tools.extend(channel_tools);
+
+    // Build coding agent delegation tool (if coding agents are enabled)
+    if let Some(ref ca_delegator) = coding_agent_delegator {
+        let delegation_tool = crate::executable_tools::build_coding_agent_delegation_tool(
+            ca_delegator.clone(),
+        );
+        agent_management_tools.push(delegation_tool);
+        tracing::info!("built coding agent delegation tool");
+    }
+    if let Some(ref ca_registry) = coding_agent_registry {
+        let list_tool = crate::executable_tools::build_coding_agent_list_tool(
+            ca_registry.clone(),
+        );
+        agent_management_tools.push(list_tool);
+        tracing::info!("built coding agent list tool");
+    }
 
     Ok(GatewayState {
         config: Arc::new(ArcSwap::from_pointee(config.clone())),

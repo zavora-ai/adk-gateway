@@ -34,28 +34,29 @@ name = "multi_agent_demo"
 path = "examples/multi_agent_demo.rs"
 
 [dependencies]
-# ADK umbrella crate (published on crates.io)
-adk-rust = { version = "0.8.4", features = ["standard", "mcp", "gemini", "openai", "anthropic", "ollama", "deepseek", "groq", "openrouter", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova"] }
+# ADK crates (local path for development)
+adk-rust = { path = "../adk-rust/adk-rust", features = ["standard", "mcp", "gemini", "openai", "anthropic", "ollama", "deepseek", "groq", "openrouter", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova"] }
 
 # Direct access to individual ADK crates for gateway-specific needs
-adk-core = "0.8.4"
-adk-agent = "0.8.4"
-adk-runner = "0.8.4"
-adk-session = "0.8.4"
-adk-server = "0.8.4"
-adk-artifact = "0.8.4"
-adk-model = { version = "0.8.4", features = ["gemini", "openai", "anthropic", "ollama", "deepseek", "groq", "openrouter", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova"] }
-adk-tool = { version = "0.8.4", features = ["mcp"] }
-adk-skill = "0.8.4"
-adk-plugin = "0.8.4"
-adk-telemetry = "0.8.4"
-adk-auth = "0.8.4"
-adk-graph = "0.8.4"
-adk-memory = "0.8.4"
-awp-types = "0.8.4"
-adk-awp = "0.8.4"
-adk-deploy = "0.8.4"
-adk-sandbox = "0.8.4"
+adk-core = { path = "../adk-rust/adk-core" }
+adk-agent = { path = "../adk-rust/adk-agent" }
+adk-runner = { path = "../adk-rust/adk-runner" }
+adk-session = { path = "../adk-rust/adk-session" }
+adk-server = { path = "../adk-rust/adk-server" }
+adk-artifact = { path = "../adk-rust/adk-artifact" }
+adk-model = { path = "../adk-rust/adk-model", features = ["gemini", "openai", "anthropic", "ollama", "deepseek", "groq", "openrouter", "fireworks", "together", "mistral", "perplexity", "cerebras", "sambanova"] }
+adk-tool = { path = "../adk-rust/adk-tool", features = ["mcp"] }
+adk-skill = { path = "../adk-rust/adk-skill" }
+adk-plugin = { path = "../adk-rust/adk-plugin" }
+adk-telemetry = { path = "../adk-rust/adk-telemetry" }
+adk-auth = { path = "../adk-rust/adk-auth" }
+adk-graph = { path = "../adk-rust/adk-graph" }
+adk-memory = { path = "../adk-rust/adk-memory" }
+awp-types = { path = "../adk-rust/awp-types" }
+adk-awp = { path = "../adk-rust/adk-awp" }
+adk-deploy = { path = "../adk-rust/adk-deploy" }
+adk-sandbox = { path = "../adk-rust/adk-sandbox" }
+adk-acp = { path = "../adk-rust/adk-acp" }
 
 # Embedded UI assets
 rust-embed = { version = "8", features = ["mime-guess"] }
@@ -140,7 +141,7 @@ firestore = ["dep:google-cloud-auth", "dep:google-cloud-token"]
 acp = []
 
 [dependencies.adk-browser]
-version = "0.8.4"
+path = "../adk-rust/adk-browser"
 optional = true
 
 [dependencies.sqlx-core]

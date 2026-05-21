@@ -935,6 +935,7 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
     tracing::info!(
         gateway = env!("CARGO_PKG_VERSION"),
         adk_rust = ADK_VERSION,
+        built = env!("BUILD_TIMESTAMP"),
         addr = %bind_addr,
         "HTTP server listening"
     );

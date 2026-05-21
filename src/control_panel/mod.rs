@@ -36,6 +36,9 @@ use std::time::Instant;
 #[derive(Debug, Clone, Serialize)]
 pub struct DashboardData {
     pub uptime_secs: u64,
+    pub version: String,
+    pub adk_version: String,
+    pub built_at: String,
     pub connected_channels: Vec<ChannelInfo>,
     pub active_session_count: u64,
     pub memory_status: Option<SubsystemStatus>,
@@ -363,6 +366,9 @@ impl ControlPanelState {
 
         DashboardData {
             uptime_secs: self.start_time.elapsed().as_secs(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            adk_version: env!("ADK_RUST_VERSION").to_string(),
+            built_at: env!("BUILD_TIMESTAMP").to_string(),
             connected_channels: channels,
             active_session_count: session_count,
             memory_status,
@@ -731,6 +737,14 @@ pub fn build_routes(state: Arc<ControlPanelState>) -> axum::Router<Arc<ControlPa
         .route(
             "/ui/api/coding-agents/{id}/tasks/{task_id}/cancel",
             axum::routing::post(coding_agents::cancel_task),
+        )
+        .route(
+            "/ui/api/coding-agents/{id}/connect",
+            axum::routing::post(coding_agents::connect_agent),
+        )
+        .route(
+            "/ui/api/coding-agents/{id}/disconnect",
+            axum::routing::post(coding_agents::disconnect_agent),
         )
         .route(
             "/ui/api/coding-agents/{id}/costs",

@@ -19,7 +19,9 @@ export interface WizardState {
   currentStep: number;
   backendType: string | null;
   cliVerified: boolean;
+  cliPath: string | null;
   authConfigured: boolean;
+  authCredentials: string | null;
   workspaces: string[];
   alias: string;
   endpoint: string;
@@ -31,7 +33,9 @@ const INITIAL_STATE: WizardState = {
   currentStep: 1,
   backendType: null,
   cliVerified: false,
+  cliPath: null,
   authConfigured: false,
+  authCredentials: null,
   workspaces: [],
   alias: '',
   endpoint: '',
@@ -48,7 +52,9 @@ function hasDataEntered(state: WizardState): boolean {
     state.alias !== '' ||
     state.endpoint !== '' ||
     state.timeoutSecs !== null ||
-    state.costCapUsd !== null
+    state.costCapUsd !== null ||
+    state.cliPath !== null ||
+    state.authCredentials !== null
   );
 }
 
@@ -60,7 +66,7 @@ function StepCliVerification({
 }: {
   backendType: string;
   backends: CodingAgentBackend[];
-  onVerified: () => void;
+  onVerified: (path: string | null) => void;
 }) {
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<CliVerificationResult | null>(null);
@@ -80,7 +86,7 @@ function StepCliVerification({
       if (res.ok && res.data) {
         setResult(res.data);
         if (res.data.installed) {
-          onVerified();
+          onVerified(res.data.path ?? null);
         }
       } else if (!res.ok) {
         setError(res.message || 'Verification request failed');
@@ -257,7 +263,7 @@ function StepAuthentication({
   onComplete,
 }: {
   authMethod: AgentAuthMethod;
-  onComplete: () => void;
+  onComplete: (credentials?: string) => void;
 }) {
   const [apiKey, setApiKey] = useState('');
 
@@ -293,7 +299,7 @@ function StepAuthentication({
           type="button"
           onClick={() => {
             if (apiKey.trim()) {
-              onComplete();
+              onComplete(apiKey.trim());
             }
           }}
           disabled={!apiKey.trim()}
@@ -340,7 +346,7 @@ function StepAuthentication({
         </pre>
         <button
           type="button"
-          onClick={onComplete}
+          onClick={() => onComplete()}
           className="px-4 py-2 text-sm font-medium bg-[var(--color-accent)] text-white rounded-lg hover:bg-[var(--color-accent-hover)]"
         >
           I've completed the login
@@ -615,12 +621,12 @@ export default function OnboardingWizard() {
     }));
   }, []);
 
-  const handleCliVerified = useCallback(() => {
-    setState((prev) => ({ ...prev, cliVerified: true }));
+  const handleCliVerified = useCallback((path: string | null) => {
+    setState((prev) => ({ ...prev, cliVerified: true, cliPath: path }));
   }, []);
 
-  const handleAuthComplete = useCallback(() => {
-    setState((prev) => ({ ...prev, authConfigured: true }));
+  const handleAuthComplete = useCallback((credentials?: string) => {
+    setState((prev) => ({ ...prev, authConfigured: true, authCredentials: credentials ?? null }));
     goNext();
   }, [goNext]);
 
@@ -628,16 +634,28 @@ export default function OnboardingWizard() {
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // Build transport config from wizard data
+      const transport = state.cliPath ? {
+        type: 'stdio' as const,
+        command: state.cliPath,
+        args: ['acp'],
+        env: state.authCredentials && selectedBackend?.auth_method?.type === 'apiKey'
+          ? { [(selectedBackend.auth_method as { env_var: string }).env_var]: state.authCredentials }
+          : {},
+      } : undefined;
+
       const payload: AgentRegistrationPayload = {
         backend_type: state.backendType ?? '',
         alias: state.alias,
-        endpoint: state.endpoint,
+        endpoint: transport ? '' : (state.endpoint || `acp://${state.backendType}`),
         workspaces: state.workspaces,
         timeout_secs: state.timeoutSecs,
         cost_cap_usd: state.costCapUsd,
-        auth: state.authConfigured ? { credentials: undefined, token: undefined } : null,
+        auth: state.authCredentials ? { credentials: state.authCredentials } : null,
       };
-      const res = await api.registerCodingAgent(payload);
+
+      // Include transport in the registration request
+      const res = await api.registerCodingAgent(payload, transport);
       if (res.ok) {
         navigate('/ui/coding-agents');
       } else {
@@ -648,7 +666,7 @@ export default function OnboardingWizard() {
     } finally {
       setSubmitting(false);
     }
-  }, [state, navigate]);
+  }, [state, selectedBackend, navigate]);
 
   // Determine if the Next button should be disabled for the current step
   const isNextDisabled =

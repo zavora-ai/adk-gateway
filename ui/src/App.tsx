@@ -19,6 +19,7 @@ import CodingAgentsPage from './pages/coding-agents/CodingAgentsPage';
 import AgentListView from './pages/coding-agents/AgentListView';
 import OnboardingWizard from './pages/coding-agents/OnboardingWizard';
 import AgentDetailLayout from './pages/coding-agents/AgentDetailLayout';
+import AgentOverview from './pages/coding-agents/AgentOverview';
 import TaskHistoryTable from './pages/coding-agents/TaskHistoryTable';
 import TaskDetailView from './pages/coding-agents/TaskDetailView';
 import CostStatisticsPanel from './pages/coding-agents/CostStatisticsPanel';
@@ -48,7 +49,8 @@ export default function App() {
             <Route index element={<AgentListView />} />
             <Route path="new" element={<OnboardingWizard />} />
             <Route path=":agentId" element={<AgentDetailLayout />}>
-              <Route index element={<TaskHistoryTable />} />
+              <Route index element={<AgentOverview />} />
+              <Route path="tasks" element={<TaskHistoryTable />} />
               <Route path="tasks/:taskId" element={<TaskDetailView />} />
               <Route path="costs" element={<CostStatisticsPanel />} />
               <Route path="new-task" element={<TaskDelegationForm />} />

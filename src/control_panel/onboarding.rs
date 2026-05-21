@@ -462,6 +462,7 @@ pub async fn onboarding_complete(
         id: payload.id.clone(),
         backend_type: payload.backend_type.clone(),
         endpoint: payload.endpoint.clone(),
+        transport: None,
         workspaces: payload.workspaces.clone(),
         timeout_secs: payload.timeout_secs,
         cost_cap_usd: payload.cost_cap_usd,

@@ -51,8 +51,13 @@ pub struct CodingAgentInstanceConfig {
     /// The backend type (references a BackendDefinition).
     #[serde(rename = "backendType")]
     pub backend_type: String,
-    /// ACP endpoint URL for this agent.
+    /// ACP endpoint URL for HTTP transport (legacy). Ignored when `transport` is set.
+    #[serde(default)]
     pub endpoint: String,
+    /// Transport configuration — how the gateway communicates with this agent.
+    /// If not set, falls back to HTTP endpoint.
+    #[serde(default)]
+    pub transport: Option<AgentTransport>,
     /// Workspace directories this agent can operate in.
     pub workspaces: Vec<PathBuf>,
     /// Per-agent timeout override in seconds.
@@ -68,6 +73,28 @@ pub struct CodingAgentInstanceConfig {
     pub alias: Option<String>,
     /// Authentication configuration.
     pub auth: Option<AgentAuthConfig>,
+}
+
+/// Transport configuration for communicating with a coding agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum AgentTransport {
+    /// Spawn the agent as a child process and communicate via stdio (like MCP servers).
+    Stdio {
+        /// Path to the agent CLI binary.
+        command: String,
+        /// Arguments to pass to the command.
+        #[serde(default)]
+        args: Vec<String>,
+        /// Environment variables to set for the process.
+        #[serde(default)]
+        env: std::collections::HashMap<String, String>,
+    },
+    /// Connect to a pre-running HTTP ACP endpoint.
+    Http {
+        /// The ACP endpoint URL (e.g., "http://localhost:3100").
+        url: String,
+    },
 }
 
 /// Extensible backend definition — loaded from config, no code changes needed.

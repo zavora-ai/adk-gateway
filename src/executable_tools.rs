@@ -375,7 +375,7 @@ fn agent_create_tool(
 ) -> FunctionTool {
     FunctionTool::new(
         "agent_create",
-        "Create a new specialist agent. Requires: name, description, model (e.g. 'anthropic/claude-sonnet-4'), instruction. Optional: tools (array of tool names), auto_start (bool).",
+        "Create a new specialist LLM sub-agent for conversation routing and specialized tasks. NOT for coding tasks — use delegate_to_coding_agent for code changes. Requires: name, description, model (e.g. 'anthropic/claude-sonnet-4'), instruction. Optional: tools (array of tool names), auto_start (bool), channel_bindings (array of 'channel:account_id').",
         move |_ctx: Arc<dyn ToolContext>, args: Value| {
             let registry = registry.clone();
             let rbac = rbac.clone();
@@ -1314,6 +1314,107 @@ pub fn build_filesystem_tools(workspace_root: PathBuf) -> Vec<Arc<dyn adk_core::
         Arc::new(fs_read_tool(workspace_root.clone())),
         Arc::new(fs_search_tool(workspace_root)),
     ]
+}
+
+/// Build the coding agent delegation tool.
+pub fn build_coding_agent_delegation_tool(
+    delegator: Arc<crate::coding_agent::delegator::TaskDelegator>,
+) -> Arc<dyn adk_core::Tool> {
+    Arc::new(FunctionTool::new(
+        "delegate_to_coding_agent",
+        "Delegate a coding task to a registered coding agent (e.g., Claude Code, Kiro CLI, Codex). The agent executes the task in a real workspace with filesystem access — writing code, running commands, creating files. Use coding_agent_list first to see available agents. NOT for creating new agents — use agent_create for that.",
+        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+            let delegator = delegator.clone();
+            async move {
+                let agent = args.get("agent")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| adk_core::AdkError::tool("'agent' field is required (agent ID or alias)"))?;
+
+                let task = args.get("task")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| adk_core::AdkError::tool("'task' field is required (task description)"))?;
+
+                let workspace = args.get("workspace")
+                    .and_then(|v| v.as_str())
+                    .map(std::path::PathBuf::from);
+
+                let file_context: Option<Vec<std::path::PathBuf>> = args.get("files")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(std::path::PathBuf::from)).collect());
+
+                let request = crate::coding_agent::models::TaskRequest {
+                    description: task.to_string(),
+                    trigger: crate::coding_agent::models::TaskTrigger::AgentDelegation {
+                        source_agent_id: "system".to_string(),
+                    },
+                    workspace,
+                    file_context,
+                    reply_to: crate::coding_agent::models::ReplyTarget {
+                        channel_type: "internal".to_string(),
+                        channel_id: "system".to_string(),
+                        message_id: None,
+                    },
+                };
+
+                match delegator.delegate(agent, request).await {
+                    Ok(task_id) => Ok(serde_json::json!({
+                        "status": "queued",
+                        "task_id": task_id,
+                        "agent": agent,
+                        "message": format!("Task delegated to '{}'. Task ID: {}", agent, task_id)
+                    })),
+                    Err(e) => Ok(serde_json::json!({
+                        "status": "error",
+                        "error": format!("{}", e),
+                        "agent": agent
+                    })),
+                }
+            }
+        },
+    ))
+}
+
+/// Build the coding agent list tool — lets the LLM discover available coding agents.
+pub fn build_coding_agent_list_tool(
+    registry: Arc<crate::coding_agent::registry::CodingAgentRegistry>,
+) -> Arc<dyn adk_core::Tool> {
+    Arc::new(FunctionTool::new(
+        "coding_agent_list",
+        "List all registered coding agents with their current status. Use this to discover which coding agents are available before delegating tasks. Shows agent ID, alias, backend type, connection status, and workspaces.",
+        move |_ctx: Arc<dyn ToolContext>, _args: Value| {
+            let registry = registry.clone();
+            async move {
+                let agents = registry.list_agents();
+                let list: Vec<serde_json::Value> = agents.iter().map(|a| {
+                    let status_str = match &a.status {
+                        crate::coding_agent::status::AgentConnectionStatus::Connected => "connected",
+                        crate::coding_agent::status::AgentConnectionStatus::Disconnected { .. } => "disconnected",
+                        crate::coding_agent::status::AgentConnectionStatus::Error { .. } => "error",
+                        crate::coding_agent::status::AgentConnectionStatus::Unknown => "unknown",
+                    };
+                    serde_json::json!({
+                        "id": a.id,
+                        "alias": a.config.alias,
+                        "backend_type": a.backend_type,
+                        "status": status_str,
+                        "workspaces": a.config.workspaces.iter().map(|w| w.display().to_string()).collect::<Vec<_>>(),
+                    })
+                }).collect();
+
+                if list.is_empty() {
+                    Ok(serde_json::json!({
+                        "agents": [],
+                        "message": "No coding agents registered. The user can add one via the Control Panel at /ui/coding-agents/new"
+                    }))
+                } else {
+                    Ok(serde_json::json!({
+                        "agents": list,
+                        "count": list.len()
+                    }))
+                }
+            }
+        },
+    ))
 }
 
 fn fs_pwd_tool(root: PathBuf) -> FunctionTool {

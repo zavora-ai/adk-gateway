@@ -64,6 +64,10 @@ pub trait AgentExecutor: Send + Sync {
 /// coding agent task execution pipeline.
 pub struct AcpAgentExecutor {
     client: reqwest::Client,
+    /// Session pool for stdio-based agents (uses adk-acp).
+    session_pool: Option<Arc<crate::coding_agent::acp_client::AcpSessionPool>>,
+    /// Registry for looking up agent transport config.
+    registry: Option<Arc<CodingAgentRegistry>>,
 }
 
 impl AcpAgentExecutor {
@@ -71,9 +75,26 @@ impl AcpAgentExecutor {
     pub fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(3600)) // Individual request timeout handled by TaskExecutor
+                .timeout(Duration::from_secs(3600))
                 .build()
                 .unwrap_or_default(),
+            session_pool: None,
+            registry: None,
+        }
+    }
+
+    /// Create an executor with ACP session pool for stdio agents.
+    pub fn with_session_pool(
+        registry: Arc<CodingAgentRegistry>,
+        session_pool: Arc<crate::coding_agent::acp_client::AcpSessionPool>,
+    ) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(3600))
+                .build()
+                .unwrap_or_default(),
+            session_pool: Some(session_pool),
+            registry: Some(registry),
         }
     }
 }
@@ -86,6 +107,18 @@ impl AgentExecutor for AcpAgentExecutor {
         endpoint: &str,
         request: &TaskRequest,
     ) -> Result<TaskResult, TaskError> {
+        // Check if this agent has stdio transport — route through ACP session pool
+        if let (Some(pool), Some(registry)) = (&self.session_pool, &self.registry) {
+            if let Some(agent) = registry.get_agent(agent_id) {
+                if agent.config.transport.as_ref().is_some_and(|t| {
+                    matches!(t, crate::coding_agent::config::AgentTransport::Stdio { .. })
+                }) {
+                    return pool.execute_task(agent_id, &agent.config, request).await;
+                }
+            }
+        }
+
+        // Fallback: HTTP-based execution for legacy agents
         let payload = serde_json::json!({
             "task": request.description,
             "file_context": request.file_context,
