@@ -612,9 +612,40 @@ pub async fn build(
             tracing::info!("coding agent task delegator initialized");
 
             // Create ACP session pool for stdio-based agents (shared with panel state)
-            let ca_session_pool = Arc::new(
-                crate::coding_agent::acp_client::AcpSessionPool::new(ca_registry.clone())
-            );
+            // Use HITL permissions if Telegram is configured
+            let ca_session_pool = {
+                let tg_config = config.channels.telegram.as_ref();
+                if let Some(tg) = tg_config {
+                    // Get the last paired user's chat_id for permission routing
+                    let chat_id = std::fs::read_to_string(
+                        config_path.parent().unwrap_or(std::path::Path::new(".")).join("paired_users.json")
+                    ).ok()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                        .and_then(|v| v.as_array().cloned())
+                        .and_then(|arr| arr.first().cloned())
+                        .and_then(|u| u.get("chat_id").and_then(|c| c.as_str().map(|s| s.to_string())))
+                        .unwrap_or_default();
+
+                    if !chat_id.is_empty() {
+                        let hitl_manager = Arc::new(
+                            crate::coding_agent::hitl_permissions::HitlPermissionManager::new(
+                                tg.bot_token.clone(),
+                                chat_id,
+                            )
+                        );
+                        tracing::info!("HITL permission manager enabled for coding agents");
+                        Arc::new(crate::coding_agent::acp_client::AcpSessionPool::with_hitl(
+                            ca_registry.clone(),
+                            hitl_manager,
+                        ))
+                    } else {
+                        tracing::info!("No paired users — coding agents will auto-approve permissions");
+                        Arc::new(crate::coding_agent::acp_client::AcpSessionPool::new(ca_registry.clone()))
+                    }
+                } else {
+                    Arc::new(crate::coding_agent::acp_client::AcpSessionPool::new(ca_registry.clone()))
+                }
+            };
 
             // Create TaskExecutor with ACP-backed agent executor and spawn its background loop
             let ca_executor = {

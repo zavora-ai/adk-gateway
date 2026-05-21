@@ -612,7 +612,7 @@ impl Channel for TelegramChannel {
                 let config_for_handler = config.clone();
                 let bot_username_for_handler = bot_username.clone();
 
-                let handler =
+                let message_handler =
                     Update::filter_message().endpoint(move |msg: Message, _bot: teloxide::Bot| {
                         let tx = tx_for_handler.clone();
                         let config = config_for_handler.clone();
@@ -694,6 +694,32 @@ impl Channel for TelegramChannel {
                             respond(())
                         }
                     });
+
+                // Callback query handler for inline button presses (tool approval + HITL permissions)
+                let callback_handler = Update::filter_callback_query().endpoint(
+                    move |q: teloxide::types::CallbackQuery, bot: teloxide::Bot| async move {
+                        if let Some(data) = q.data {
+                            // Handle coding agent HITL permission callbacks
+                            if crate::coding_agent::hitl_permissions::is_perm_callback(&data) {
+                                // Answer the callback to remove loading indicator
+                                let _ = bot.answer_callback_query(&q.id).await;
+                                // The actual handling happens via the HitlPermissionManager
+                                // which is wired separately — for now just log
+                                tracing::info!(callback_data = %data, "HITL permission callback received");
+                            }
+                            // Handle tool approval callbacks (approve:/reject:)
+                            else if data.starts_with("approve:") || data.starts_with("reject:") {
+                                let _ = bot.answer_callback_query(&q.id).await;
+                                tracing::info!(callback_data = %data, "tool approval callback received");
+                            }
+                        }
+                        respond(())
+                    },
+                );
+
+                let handler = dptree::entry()
+                    .branch(message_handler)
+                    .branch(callback_handler);
 
                 let mut dispatcher = Dispatcher::builder(bot_for_dispatch, handler)
                     .enable_ctrlc_handler()

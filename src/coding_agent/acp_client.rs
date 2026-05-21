@@ -28,6 +28,8 @@ pub struct AcpSessionPool {
     sessions: DashMap<String, Arc<Mutex<AcpSession>>>,
     /// Registry reference for status updates.
     registry: Arc<CodingAgentRegistry>,
+    /// Optional HITL permission manager for routing approvals to Telegram.
+    permission_manager: Option<Arc<super::hitl_permissions::HitlPermissionManager>>,
 }
 
 impl AcpSessionPool {
@@ -36,6 +38,19 @@ impl AcpSessionPool {
         Self {
             sessions: DashMap::new(),
             registry,
+            permission_manager: None,
+        }
+    }
+
+    /// Create a session pool with HITL permission handling.
+    pub fn with_hitl(
+        registry: Arc<CodingAgentRegistry>,
+        permission_manager: Arc<super::hitl_permissions::HitlPermissionManager>,
+    ) -> Self {
+        Self {
+            sessions: DashMap::new(),
+            registry,
+            permission_manager: Some(permission_manager),
         }
     }
 
@@ -117,7 +132,12 @@ impl AcpSessionPool {
 
         info!(agent_id = %agent_id, command = %full_command, "creating ACP session");
 
-        let policy = Arc::new(PermissionPolicy::AutoApprove);
+        let policy = if let Some(ref pm) = self.permission_manager {
+            pm.build_policy()
+        } else {
+            PermissionPolicy::AutoApprove
+        };
+        let policy = Arc::new(policy);
         let session = AcpSession::start(acp_config, policy).await.map_err(|e| {
             error!(agent_id = %agent_id, error = %e, "failed to start ACP session");
             TaskError::AgentDisconnected {
