@@ -915,6 +915,7 @@ mod tests {
             id: "test-agent".to_string(),
             backend_type: "claude-code".to_string(),
             endpoint: "http://localhost:3000/acp".to_string(),
+            transport: None,
             workspaces: vec![PathBuf::from("/home/user/projects")],
             timeout_secs: Some(60),
             cost_cap_usd: Some(5.0),

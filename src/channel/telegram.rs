@@ -919,6 +919,7 @@ mod delegation_tests {
             id: id.to_string(),
             backend_type: "claude-code".to_string(),
             endpoint: format!("http://localhost:3000/{}", id),
+            transport: None,
             workspaces: vec![PathBuf::from("/home/user/projects")],
             timeout_secs: Some(900),
             cost_cap_usd: Some(5.0),
