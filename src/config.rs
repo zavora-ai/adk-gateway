@@ -606,10 +606,10 @@ pub struct RateLimitConfig {
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
-            max_calls: 10,
-            window_secs: 5,
-            cooldown_secs: 3,
-            max_triggers: 3,
+            max_calls: 100,      // 100 calls before first pause (was 10)
+            window_secs: 30,     // 30 second window (was 5)
+            cooldown_secs: 5,    // 5 second pause (was 3)
+            max_triggers: 10,    // 10 pauses before terminate (was 3)
         }
     }
 }

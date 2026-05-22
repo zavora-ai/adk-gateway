@@ -416,22 +416,13 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
         // Validate that with_defaults() produces a usable rate limiter
         let _ = RateLimiter::with_defaults();
 
-        // Max iterations: gateway-level iteration counter that terminates
-        // the tool-call loop when the configured limit is reached.
-        // Implemented here (not in adk-rust) to avoid modifying upstream.
-        // Uses resolve_max_iterations() to support per-agent overrides.
-        let max_iterations_limit = {
-            let cfg = state.config.load();
-            cfg.runner.resolve_max_iterations(None)
-        };
-        let iteration_counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        // Note: Max iterations limit disabled for now to allow longer agent runs.
+        // The rate limiter below still provides protection against runaway loops.
 
         rebuilt_builder = rebuilt_builder.after_tool_callback_full(Box::new(
             move |ctx, tool, args, result| {
                 let progress = progress_map.clone();
                 let limiter = rate_limiter.clone();
-                let iter_counter = iteration_counter.clone();
-                let max_iter = max_iterations_limit;
                 Box::pin(async move {
                     let tool_name = tool.name().to_string();
                     let user_id = ctx.user_id().to_string();
@@ -441,23 +432,6 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
                         result_size = result.to_string().len(),
                         "tool executed"
                     );
-
-                    // Max iterations check: terminate if we've exceeded the limit
-                    let iteration = iter_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    if iteration >= max_iter {
-                        tracing::warn!(
-                            tool = %tool_name,
-                            iteration_count = iteration,
-                            max_iterations = max_iter,
-                            "max iterations reached, terminating request"
-                        );
-                        return Ok(Some(serde_json::json!({
-                            "error": "MAX_ITERATIONS_REACHED",
-                            "message": format!("Agent execution stopped: max iterations ({}) reached. Partial result returned.", max_iter),
-                            "iteration_count": iteration,
-                            "max_iterations_reached": true
-                        })));
-                    }
 
                     // Rate limiter check: sliding window detects rapid tool invocations
                     let decision = {
@@ -488,7 +462,7 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
                         RateLimitDecision::Allow => {}
                     }
 
-                    // Send progress message for user-visible tools
+                    // Send progress message with tool result for transparency
                     let emoji = match tool_name.as_str() {
                         name if name.starts_with("fs_") => "📂",
                         name if name.starts_with("kg_") => "🧠",
@@ -505,7 +479,9 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
                     };
 
                     if !emoji.is_empty() {
-                        let msg = format!("{} {}", emoji, tool_name.replace('_', " "));
+                        // Format tool result for user transparency
+                        let result_preview = format_tool_result_preview(&tool_name, &args, &result);
+                        let msg = format!("{} {} → {}", emoji, tool_name, result_preview);
                         progress.entry(user_id).or_default().push(msg);
                     }
 
@@ -896,7 +872,7 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
                         None => return,
                     };
                     // Per-message timeout to prevent hung operations
-                    let timeout = std::time::Duration::from_secs(90); // 90 seconds max per message
+                    let timeout = std::time::Duration::from_secs(600); // 10 minutes max per message
                     match tokio::time::timeout(timeout, process_message(msg, &state)).await {
                         Ok(Ok(())) => {}
                         Ok(Err(e)) => tracing::error!(error = %e, "failed to process message"),
@@ -1277,11 +1253,14 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
             let progress_map = state.progress_messages.clone();
             let progress_user_id = user_id.clone();
             tokio::spawn(async move {
+                let mut typing_interval = tokio::time::interval(std::time::Duration::from_secs(4));
+                let mut progress_interval = tokio::time::interval(std::time::Duration::from_millis(500));
+                
                 loop {
                     tokio::select! {
                         _ = cancel.cancelled() => break,
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(4)) => {
-                            // Check for progress messages to send
+                        _ = progress_interval.tick() => {
+                            // Check for progress messages to send (more frequently for responsiveness)
                             let messages: Vec<String> = progress_map
                                 .get_mut(&progress_user_id)
                                 .map(|mut entry| entry.value_mut().drain(..).collect())
@@ -1298,6 +1277,9 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
                                 };
                                 let _ = channel.send(out).await;
                             }
+                        }
+                        _ = typing_interval.tick() => {
+                            // Keep typing indicator alive
                             let _ = channel.send_typing(&chat_id).await;
                         }
                     }
@@ -2432,6 +2414,236 @@ fn load_context_file(
         }
     }
     String::new()
+}
+
+/// Format a tool result preview for user transparency.
+/// Shows meaningful summaries of tool outputs without overwhelming the user.
+fn format_tool_result_preview(tool_name: &str, args: &serde_json::Value, result: &serde_json::Value) -> String {
+    // Handle error results first
+    if let Some(error) = result.get("error").and_then(|e| e.as_str()) {
+        return format!("❌ {}", truncate_str(error, 60));
+    }
+    if let Some(error) = result.get("message").and_then(|e| e.as_str()) {
+        if result.get("error").is_some() || result.get("success").map(|v| v == false).unwrap_or(false) {
+            return format!("❌ {}", truncate_str(error, 60));
+        }
+    }
+    
+    // Extract path from args for context
+    let path_arg = args.get("path")
+        .or_else(|| args.get("file"))
+        .or_else(|| args.get("dir"))
+        .and_then(|p| p.as_str())
+        .map(|p| {
+            // Shorten long paths - show just filename or last component
+            if p.len() > 30 {
+                p.rsplit('/').next().unwrap_or(p)
+            } else {
+                p
+            }
+        });
+    
+    match tool_name {
+        // Filesystem tools - show simple, human-readable output
+        "fs_pwd" => {
+            result.as_str()
+                .or_else(|| result.get("path").and_then(|p| p.as_str()))
+                .or_else(|| result.get("cwd").and_then(|p| p.as_str()))
+                .map(|p| shorten_path(p))
+                .unwrap_or_else(|| "✓".to_string())
+        }
+        
+        "fs_list" | "fs_ls" | "list_directory" | "filesystem" => {
+            // Handle various list formats
+            if let Some(entries) = result.get("entries").and_then(|e| e.as_array())
+                .or_else(|| result.get("files").and_then(|e| e.as_array()))
+                .or_else(|| result.as_array()) 
+            {
+                let count = entries.len();
+                if count == 0 {
+                    "empty folder".to_string()
+                } else {
+                    format!("{} items", count)
+                }
+            } else if let Some(count) = result.get("count").and_then(|c| c.as_u64()) {
+                format!("{} items", count)
+            } else {
+                "✓".to_string()
+            }
+        }
+        
+        "fs_read" | "fs_read_file" | "read_file" => {
+            let filename = path_arg.unwrap_or("file");
+            if let Some(content) = result.get("content").and_then(|c| c.as_str())
+                .or_else(|| result.as_str()) 
+            {
+                let line_count = content.lines().count();
+                format!("{} ({} lines)", filename, line_count)
+            } else {
+                format!("{} ✓", filename)
+            }
+        }
+        
+        "fs_write" | "fs_write_file" | "write_file" | "fs_create" => {
+            let filename = path_arg.unwrap_or("file");
+            format!("{} saved ✓", filename)
+        }
+        
+        "fs_mkdir" | "fs_create_dir" | "create_directory" => {
+            let dirname = path_arg.unwrap_or("folder");
+            format!("{} created ✓", dirname)
+        }
+        
+        "fs_rm" | "fs_delete" | "fs_remove" | "delete_file" => {
+            let filename = path_arg.unwrap_or("item");
+            format!("{} deleted", filename)
+        }
+        
+        "fs_mv" | "fs_move" | "fs_rename" | "move_file" => "moved ✓".to_string(),
+        "fs_cp" | "fs_copy" | "copy_file" => "copied ✓".to_string(),
+        
+        "fs_search" | "fs_find" | "fs_glob" | "search_files" => {
+            if let Some(matches) = result.get("matches").and_then(|m| m.as_array())
+                .or_else(|| result.get("results").and_then(|m| m.as_array()))
+                .or_else(|| result.as_array()) 
+            {
+                let count = matches.len();
+                if count == 0 {
+                    "no matches".to_string()
+                } else {
+                    format!("{} found", count)
+                }
+            } else {
+                "✓".to_string()
+            }
+        }
+        
+        // Script/command execution - keep it simple
+        "run_script" | "execute" | "shell" | "bash" | "exec" => {
+            // Check for error in output
+            if let Some(output) = result.get("output").and_then(|o| o.as_str())
+                .or_else(|| result.get("stdout").and_then(|o| o.as_str()))
+                .or_else(|| result.as_str())
+            {
+                if output.to_lowercase().contains("error") {
+                    return "⚠️ completed with errors".to_string();
+                }
+                // Don't show raw output - just confirm it ran
+                "✓".to_string()
+            } else if let Some(code) = result.get("exit_code").and_then(|c| c.as_i64())
+                .or_else(|| result.get("code").and_then(|c| c.as_i64()))
+            {
+                if code == 0 {
+                    "✓".to_string()
+                } else {
+                    format!("exit {}", code)
+                }
+            } else {
+                "✓".to_string()
+            }
+        }
+        
+        // Knowledge graph tools
+        "kg_search" | "kg_query" | "memory_search" => {
+            if let Some(results) = result.get("results").and_then(|r| r.as_array())
+                .or_else(|| result.as_array()) 
+            {
+                format!("{} memories", results.len())
+            } else {
+                "searched ✓".to_string()
+            }
+        }
+        "kg_store" | "kg_add" | "kg_remember" | "memory_store" => "remembered ✓".to_string(),
+        
+        // Browser tools
+        "browser_navigate" | "scrape" | "web_fetch" => {
+            if let Some(title) = result.get("title").and_then(|t| t.as_str()) {
+                truncate_str(title, 40)
+            } else {
+                "loaded ✓".to_string()
+            }
+        }
+        
+        "screenshot" | "snapshot" => "captured ✓".to_string(),
+        
+        // Agent/task tools
+        "agent_list" | "list_agents" => {
+            if let Some(agents) = result.get("agents").and_then(|a| a.as_array())
+                .or_else(|| result.as_array()) 
+            {
+                format!("{} agents", agents.len())
+            } else {
+                "✓".to_string()
+            }
+        }
+        "agent_create" | "agent_start" => "started ✓".to_string(),
+        "agent_stop" | "agent_delete" => "stopped ✓".to_string(),
+        
+        "task_create" | "task_add" | "delegate_task" => "delegated ✓".to_string(),
+        "task_list" => {
+            if let Some(tasks) = result.get("tasks").and_then(|t| t.as_array())
+                .or_else(|| result.as_array()) 
+            {
+                format!("{} tasks", tasks.len())
+            } else {
+                "✓".to_string()
+            }
+        }
+        "task_complete" | "task_done" => "completed ✓".to_string(),
+        
+        // UI automation - just confirm action
+        "left_click" | "right_click" | "double_click" | "click" => "clicked ✓".to_string(),
+        "type" | "type_text" => "typed ✓".to_string(),
+        "key" | "press_key" => "pressed ✓".to_string(),
+        "open_application" | "launch" => "opened ✓".to_string(),
+        "scroll" => "scrolled ✓".to_string(),
+        
+        // Default: just show success, don't dump raw data
+        _ => {
+            // Check if result indicates success
+            if result.get("success").map(|v| v == true).unwrap_or(false) 
+                || result.get("ok").map(|v| v == true).unwrap_or(false) 
+            {
+                "✓".to_string()
+            } else if result.is_null() || (result.is_object() && result.as_object().map(|o| o.is_empty()).unwrap_or(false)) {
+                "✓".to_string()
+            } else {
+                // For unknown tools, just confirm completion
+                "done".to_string()
+            }
+        }
+    }
+}
+
+/// Shorten a path for display - show ~ for home, truncate middle if needed
+fn shorten_path(path: &str) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let shortened = if !home.is_empty() && path.starts_with(&home) {
+        format!("~{}", &path[home.len()..])
+    } else {
+        path.to_string()
+    };
+    
+    if shortened.len() > 50 {
+        // Show first and last parts
+        let parts: Vec<&str> = shortened.split('/').collect();
+        if parts.len() > 4 {
+            format!("{}/…/{}", parts[..2].join("/"), parts[parts.len()-2..].join("/"))
+        } else {
+            truncate_str(&shortened, 50)
+        }
+    } else {
+        shortened
+    }
+}
+
+/// Truncate a string to max length, adding ellipsis if needed.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max_len.saturating_sub(1)])
+    }
 }
 
 fn resolve_stream_mode(
