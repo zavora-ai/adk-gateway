@@ -558,6 +558,11 @@ pub async fn build(
     }));
     tracing::info!(path = %task_log_path.display(), "task log store initialized");
 
+    // ── Channel map (created early for coding agent streaming) ─────
+    // This is shared across the gateway and used by StreamingAgentExecutor
+    // to deliver real-time updates to users during coding agent execution.
+    let channel_map: Arc<DashMap<ChannelKey, Arc<dyn Channel>>> = Arc::new(DashMap::new());
+
     // ── Coding agent subsystem initialization ──────────────────────
     let (coding_agent_registry, coding_agent_delegator, coding_agent_queue, coding_agent_cost_tracker, coding_agent_history, coding_agent_history_db, coding_agent_session_pool) =
         if config.coding_agents.enabled {
@@ -647,13 +652,13 @@ pub async fn build(
                 }
             };
 
-            // Create TaskExecutor with ACP-backed agent executor and spawn its background loop
+            // Create TaskExecutor with streaming agent executor and spawn its background loop
             let ca_executor = {
-                use crate::coding_agent::executor::{AcpAgentExecutor, TaskExecutor, TaskHistory as ExecutorTaskHistory};
+                use crate::coding_agent::executor::{StreamingAgentExecutor, TaskExecutor, TaskHistory as ExecutorTaskHistory};
 
-                let agent_executor = Arc::new(AcpAgentExecutor::with_session_pool(
+                let agent_executor = Arc::new(StreamingAgentExecutor::new(
                     ca_registry.clone(),
-                    ca_session_pool.clone(),
+                    channel_map.clone(),
                 ));
                 let executor_history = Arc::new(ExecutorTaskHistory::new(200));
                 let executor = Arc::new(TaskExecutor::new(
@@ -672,7 +677,7 @@ pub async fn build(
                     executor_clone.run().await;
                 });
 
-                tracing::info!("coding agent task executor spawned");
+                tracing::info!("coding agent streaming task executor spawned");
                 executor
             };
             // Keep executor alive by storing in a variable (it's referenced by the spawned task)
@@ -772,8 +777,7 @@ pub async fn build(
     tracing::info!("built {} filesystem tools", fs_tools.len());
     agent_management_tools.extend(fs_tools);
 
-    // Build channel tools (send_photo) — needs channel_map Arc
-    let channel_map = Arc::new(DashMap::new());
+    // Build channel tools (send_photo) — uses channel_map created earlier
     let channel_tools = crate::executable_tools::build_channel_tools(channel_map.clone());
     tracing::info!("built {} channel tools", channel_tools.len());
     agent_management_tools.extend(channel_tools);

@@ -17,8 +17,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::channel::ChannelType;
-use crate::delivery::{DeliveryStrategy, MessageRef};
+use dashmap::DashMap;
+use tracing::{info, warn, error};
+
+use crate::channel::{Channel, ChannelKey, ChannelType};
+use crate::delivery::{DeliveryStrategy, MessageRef, select_strategy};
 
 use super::acp_streaming::{
     CodingAgentUpdate, CodingAgentUpdateStream, StreamingAcpClient,
@@ -57,25 +60,36 @@ pub struct StreamingTaskExecutor {
     client: StreamingAcpClient,
     /// Registry for looking up agent configs
     registry: Arc<CodingAgentRegistry>,
+    /// Channel map for looking up channels to deliver results
+    channel_map: Arc<DashMap<ChannelKey, Arc<dyn Channel>>>,
     /// Streaming configuration
     config: StreamingConfig,
 }
 
 impl StreamingTaskExecutor {
     /// Create a new streaming task executor.
-    pub fn new(registry: Arc<CodingAgentRegistry>) -> Self {
+    pub fn new(
+        registry: Arc<CodingAgentRegistry>,
+        channel_map: Arc<DashMap<ChannelKey, Arc<dyn Channel>>>,
+    ) -> Self {
         Self {
             client: StreamingAcpClient::new(),
             registry,
+            channel_map,
             config: StreamingConfig::default(),
         }
     }
 
     /// Create with custom streaming configuration.
-    pub fn with_config(registry: Arc<CodingAgentRegistry>, config: StreamingConfig) -> Self {
+    pub fn with_config(
+        registry: Arc<CodingAgentRegistry>,
+        channel_map: Arc<DashMap<ChannelKey, Arc<dyn Channel>>>,
+        config: StreamingConfig,
+    ) -> Self {
         Self {
             client: StreamingAcpClient::new(),
             registry,
+            channel_map,
             config,
         }
     }
@@ -83,16 +97,77 @@ impl StreamingTaskExecutor {
     /// Execute a task with streaming updates delivered to the user.
     ///
     /// This method:
-    /// 1. Starts the ACP streaming session
-    /// 2. Forwards updates to the delivery strategy in real-time
-    /// 3. Returns the final result when complete
+    /// 1. Looks up the channel for the reply target
+    /// 2. Creates a delivery strategy
+    /// 3. Starts the ACP streaming session
+    /// 4. Forwards updates to the delivery strategy in real-time
+    /// 5. Returns the final result when complete
     ///
     /// # Arguments
     /// * `agent_id` - The agent to execute on
-    /// * `request` - The task request
-    /// * `delivery` - The delivery strategy for sending updates
-    /// * `msg_ref` - Reference to the message being replied to
+    /// * `request` - The task request (includes reply_to for delivery)
     pub async fn execute_with_streaming(
+        &self,
+        agent_id: &str,
+        request: &TaskRequest,
+    ) -> Result<TaskResult, TaskError> {
+        // Look up agent config
+        let agent = self.registry.get_agent(agent_id).ok_or_else(|| {
+            TaskError::AgentDisconnected {
+                agent_id: agent_id.to_string(),
+            }
+        })?;
+
+        // Build message ref from request
+        let msg_ref = msg_ref_from_request(request);
+
+        // Look up the channel for delivery
+        let channel_key = ChannelKey {
+            channel_type: msg_ref.channel_type,
+            account_id: msg_ref.account_id.clone(),
+        };
+
+        let channel = self.channel_map.get(&channel_key)
+            .map(|c| c.value().clone())
+            .ok_or_else(|| {
+                warn!(
+                    channel_type = ?msg_ref.channel_type,
+                    account_id = %msg_ref.account_id,
+                    "Channel not found for delivery"
+                );
+                TaskError::ExecutionError {
+                    message: format!("Channel {:?}/{} not found", msg_ref.channel_type, msg_ref.account_id),
+                    partial_output: None,
+                }
+            })?;
+
+        // Create delivery strategy (streaming if channel supports editing)
+        let delivery = select_strategy(channel, Some("partial"));
+
+        info!(
+            agent_id = %agent_id,
+            channel_type = ?msg_ref.channel_type,
+            recipient = %msg_ref.recipient_id,
+            "Starting streaming task execution"
+        );
+
+        // Start streaming
+        let mut stream = self.client
+            .execute_streaming(agent_id, &agent.config, request)
+            .await?;
+
+        // Process updates and forward to delivery
+        let result = self.process_stream(
+            &mut stream,
+            delivery,
+            msg_ref,
+        ).await;
+
+        result
+    }
+
+    /// Execute without looking up channel - use provided delivery strategy.
+    pub async fn execute_with_delivery(
         &self,
         agent_id: &str,
         request: &TaskRequest,
@@ -112,13 +187,7 @@ impl StreamingTaskExecutor {
             .await?;
 
         // Process updates and forward to delivery
-        let result = self.process_stream(
-            &mut stream,
-            delivery,
-            msg_ref,
-        ).await;
-
-        result
+        self.process_stream(&mut stream, delivery, msg_ref).await
     }
 
     /// Process the update stream and forward to delivery.
@@ -188,8 +257,11 @@ impl StreamingTaskExecutor {
                             token_usage: None,
                         });
                     } else {
+                        // Send error message
+                        let error_msg = error.clone().unwrap_or_else(|| "Unknown error".to_string());
+                        let _ = delivery.on_complete(&format!("❌ Task failed: {}", error_msg), &msg_ref).await;
                         return Err(TaskError::ExecutionError {
-                            message: error.unwrap_or_else(|| "Unknown error".to_string()),
+                            message: error_msg,
                             partial_output: if output.is_empty() { None } else { Some(output) },
                         });
                     }
@@ -214,6 +286,7 @@ impl StreamingTaskExecutor {
         }
 
         // Stream ended without Done - shouldn't happen but handle gracefully
+        error!("ACP stream ended unexpectedly without Done update");
         Err(TaskError::ExecutionError {
             message: "Stream ended unexpectedly".to_string(),
             partial_output: if accumulated_text.is_empty() { None } else { Some(accumulated_text) },
@@ -283,7 +356,25 @@ mod tests {
         let request = make_request("test task");
         let msg_ref = msg_ref_from_request(&request);
         
+        assert_eq!(msg_ref.channel_type, ChannelType::Telegram);
         assert_eq!(msg_ref.recipient_id, "123");
         assert_eq!(msg_ref.message_id, Some("456".to_string()));
+    }
+
+    #[test]
+    fn test_msg_ref_channel_type_mapping() {
+        let mut request = make_request("test");
+        
+        request.reply_to.channel_type = "slack".to_string();
+        assert_eq!(msg_ref_from_request(&request).channel_type, ChannelType::Slack);
+        
+        request.reply_to.channel_type = "discord".to_string();
+        assert_eq!(msg_ref_from_request(&request).channel_type, ChannelType::Discord);
+        
+        request.reply_to.channel_type = "TELEGRAM".to_string(); // case insensitive
+        assert_eq!(msg_ref_from_request(&request).channel_type, ChannelType::Telegram);
+        
+        request.reply_to.channel_type = "unknown".to_string();
+        assert_eq!(msg_ref_from_request(&request).channel_type, ChannelType::Telegram); // fallback
     }
 }

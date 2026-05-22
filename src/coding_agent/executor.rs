@@ -11,6 +11,16 @@
 //!
 //! The executor uses a trait-based approach (`AgentExecutor`) for the actual agent
 //! communication, allowing testing without real ACP calls.
+//!
+//! ## Streaming Support
+//!
+//! The `StreamingAgentExecutor` provides real-time updates during task execution:
+//! - Text chunks as they're generated
+//! - Tool call notifications (🔧 Reading file..., ✅ Done)
+//! - Status changes (Starting, Running, etc.)
+//! - Permission requests
+//!
+//! Use `StreamingAgentExecutor` when you need transparent agent visibility.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,15 +28,18 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use dashmap::DashMap;
 use tokio::sync::Notify;
 use tracing::{error, info, warn};
 
+use crate::channel::{Channel, ChannelKey};
 use crate::coding_agent::cost::CostTracker;
 use crate::coding_agent::models::{
     TaskError, TaskHistoryEntry, TaskId, TaskRequest, TaskResult, TaskState, TokenUsage,
 };
 use crate::coding_agent::queue::TaskQueue;
 use crate::coding_agent::registry::CodingAgentRegistry;
+use crate::coding_agent::streaming_executor::StreamingTaskExecutor;
 use crate::config::ApprovalConfig;
 use crate::tool_approval::{check_requires_approval, ApprovalDecision};
 
@@ -96,6 +109,51 @@ impl AcpAgentExecutor {
             session_pool: Some(session_pool),
             registry: Some(registry),
         }
+    }
+}
+
+// ── Streaming AgentExecutor ────────────────────────────────────────
+
+/// Streaming `AgentExecutor` that provides real-time updates during execution.
+///
+/// Unlike `AcpAgentExecutor` which blocks until completion, this executor
+/// streams updates to users via the delivery system as the agent works.
+/// Users see tool calls, status changes, and text chunks in real-time.
+pub struct StreamingAgentExecutor {
+    /// The underlying streaming executor
+    streaming_executor: StreamingTaskExecutor,
+    /// Registry for looking up agent transport config
+    #[allow(dead_code)] // Used by streaming_executor internally
+    registry: Arc<CodingAgentRegistry>,
+}
+
+impl StreamingAgentExecutor {
+    /// Create a new streaming agent executor.
+    ///
+    /// # Arguments
+    /// * `registry` - The coding agent registry
+    /// * `channel_map` - Map of channels for delivering updates to users
+    pub fn new(
+        registry: Arc<CodingAgentRegistry>,
+        channel_map: Arc<DashMap<ChannelKey, Arc<dyn Channel>>>,
+    ) -> Self {
+        Self {
+            streaming_executor: StreamingTaskExecutor::new(registry.clone(), channel_map),
+            registry,
+        }
+    }
+}
+
+#[async_trait]
+impl AgentExecutor for StreamingAgentExecutor {
+    async fn execute_task(
+        &self,
+        agent_id: &str,
+        _endpoint: &str,
+        request: &TaskRequest,
+    ) -> Result<TaskResult, TaskError> {
+        // Use the streaming executor which handles delivery internally
+        self.streaming_executor.execute_with_streaming(agent_id, request).await
     }
 }
 
