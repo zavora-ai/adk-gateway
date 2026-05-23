@@ -418,7 +418,7 @@ fn execute_agent_node(
     ctx: &WorkflowExecutionContext<'_>,
 ) -> Result<NodeResult, GraphWorkflowError> {
     use adk_core::{Content, Part};
-    use adk_runner::{Runner, RunnerConfig};
+    use adk_runner::Runner;
     use futures::StreamExt;
 
     let agent_id = node
@@ -469,22 +469,11 @@ fn execute_agent_node(
     };
 
     // Create runner with the resolved agent
-    let runner = Runner::new(RunnerConfig {
-        app_name: "adk-gateway-workflow".to_string(),
-        agent: agent.clone(),
-        session_service: ctx.session_service.clone(),
-        artifact_service: None,
-        memory_service: None,
-        plugin_manager: None,
-        run_config: None,
-        compaction_config: None,
-        context_cache_config: None,
-        cache_capable: None,
-        request_context: None,
-        cancellation_token: None,
-        intra_compaction_config: None,
-        intra_compaction_summarizer: None,
-    })
+    let runner = Runner::builder()
+        .app_name("adk-gateway-workflow")
+        .agent(agent.clone())
+        .session_service(ctx.session_service.clone())
+        .build()
     .map_err(|e| GraphWorkflowError::NodeExecutionFailed {
         node_id: node.id.clone(),
         reason: format!("failed to create runner: {}", e),

@@ -25,7 +25,7 @@ use crate::webhook::WebhookHandler;
 
 use adk_agent::LlmAgentBuilder;
 use adk_core::{Agent, Content, Part};
-use adk_runner::{Runner, RunnerConfig};
+use adk_runner::Runner;
 
 use anyhow::Context;
 use arc_swap::ArcSwap;
@@ -1882,25 +1882,13 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     let request_cancel = tokio_util::sync::CancellationToken::new();
     state.active_requests.insert(msg.sender_id.clone(), request_cancel.clone());
 
-    let runner = Runner::new(RunnerConfig {
-        app_name: state.session_bridge.app_name().to_string(),
-        agent: agent.clone(),
-        session_service: state.session_service.clone(),
-        artifact_service: None,
-        memory_service: None,
-        plugin_manager: None,
-        run_config: Some({
-            let rc = adk_core::RunConfig::default();
-            rc
-        }),
-        compaction_config: None,
-        context_cache_config: None,
-        cache_capable: None,
-        request_context: None,
-        cancellation_token: Some(request_cancel.clone()),
-        intra_compaction_config: None,
-        intra_compaction_summarizer: None,
-    })?;
+    let runner = Runner::builder()
+        .app_name(state.session_bridge.app_name().to_string())
+        .agent(agent.clone())
+        .session_service(state.session_service.clone())
+        .run_config(adk_core::RunConfig::default())
+        .cancellation_token(request_cancel.clone())
+        .build()?;
 
     let uid = adk_core::UserId::try_from(user_id.as_str())?;
     let sid = adk_core::SessionId::try_from(session_id.as_str())?;
@@ -1954,25 +1942,12 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
                             .build()
                             .map_err(|e| format!("failed to build fallback agent: {e}"))?,
                     );
-                    let runner = Runner::new(RunnerConfig {
-                        app_name,
-                        agent: fallback_agent,
-                        session_service,
-                        artifact_service: None,
-                        memory_service: None,
-                        plugin_manager: None,
-                        run_config: Some({
-                            let rc = adk_core::RunConfig::default();
-                            rc
-                        }),
-                        compaction_config: None,
-                        context_cache_config: None,
-                        cache_capable: None,
-                        request_context: None,
-                        cancellation_token: None,
-                        intra_compaction_config: None,
-                        intra_compaction_summarizer: None,
-                    })
+                    let runner = Runner::builder()
+                        .app_name(app_name)
+                        .agent(fallback_agent)
+                        .session_service(session_service)
+                        .run_config(adk_core::RunConfig::default())
+                        .build()
                     .map_err(|e| format!("failed to create runner: {e}"))?;
                     runner
                         .run(uid, sid, content)
