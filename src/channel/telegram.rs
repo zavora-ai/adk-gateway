@@ -792,6 +792,11 @@ impl Channel for TelegramChannel {
 
         let mut request = bot.send_message(ChatId(chat_id), &msg.text);
 
+        // Disable notification for partial/progress messages (like Hermes does)
+        if msg.is_partial {
+            request = request.disable_notification(true);
+        }
+
         // Reply to the original message if specified
         if let Some(ref reply_to) = msg.reply_to {
             if let Ok(msg_id) = reply_to.parse::<i32>() {
