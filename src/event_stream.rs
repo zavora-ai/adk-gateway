@@ -160,7 +160,7 @@ impl EventStreamCollector {
                         error = %e,
                         "error event in agent stream"
                     );
-                    error_text = Some(format!("\u{26a0}\u{fe0f} Error: {e}"));
+                    error_text = Some(format_agent_error(&e));
                     // Stop processing on error
                     break;
                 }
@@ -278,6 +278,85 @@ impl EventStreamCollector {
         }
         "I received your message but couldn't generate a response.".to_string()
     }
+}
+
+/// Format an agent/model error into a clean, user-friendly message.
+///
+/// Instead of dumping raw JSON error responses, this produces concise
+/// actionable messages that tell the user what went wrong and what to do.
+fn format_agent_error(error: &adk_core::AdkError) -> String {
+    let error_str = error.to_string();
+    let lower = error_str.to_lowercase();
+    
+    // API key issues
+    if lower.contains("api key expired") || lower.contains("api_key_invalid") {
+        return "⚠️ API key expired or invalid.\n\nUpdate your GOOGLE_API_KEY in ~/.zshrc and restart the gateway.".to_string();
+    }
+    if lower.contains("api key not valid") || lower.contains("invalid api key") || lower.contains("incorrect api key") {
+        return "⚠️ Invalid API key.\n\nCheck your API key configuration and restart the gateway.".to_string();
+    }
+    
+    // Quota / billing
+    if lower.contains("quota") || lower.contains("rate limit") || lower.contains("resource exhausted") {
+        return "⚠️ Rate limit or quota exceeded.\n\nWait a moment and try again, or check your API plan limits.".to_string();
+    }
+    if lower.contains("billing") || lower.contains("credit balance") || lower.contains("insufficient_quota") {
+        return "⚠️ Billing issue — out of credits.\n\nAdd credits to your API provider account.".to_string();
+    }
+    
+    // Model not found
+    if lower.contains("not found") && (lower.contains("model") || lower.contains("models/")) {
+        return "⚠️ Model not available.\n\nThe configured model may have been deprecated. Update the model in openclaw.json.".to_string();
+    }
+    
+    // Context too long
+    if lower.contains("context length") || lower.contains("token limit") || lower.contains("too many tokens") || lower.contains("max.*tokens") {
+        return "⚠️ Message too long for the model's context window.\n\nTry a shorter message or start a new session with /new.".to_string();
+    }
+    
+    // Network / connectivity
+    if lower.contains("timeout") || lower.contains("timed out") {
+        return "⚠️ Request timed out.\n\nThe model took too long to respond. Try again.".to_string();
+    }
+    if lower.contains("connection") || lower.contains("network") || lower.contains("dns") {
+        return "⚠️ Network error — couldn't reach the model provider.\n\nCheck your internet connection.".to_string();
+    }
+    
+    // Safety / content filter
+    if lower.contains("safety") || lower.contains("blocked") || lower.contains("content filter") || lower.contains("harm") {
+        return "⚠️ Response blocked by safety filter.\n\nTry rephrasing your request.".to_string();
+    }
+    
+    // Server errors
+    if lower.contains("500") || lower.contains("internal server error") || lower.contains("503") || lower.contains("overloaded") {
+        return "⚠️ Model provider is temporarily unavailable.\n\nTry again in a moment.".to_string();
+    }
+    
+    // Generic fallback — still clean, no raw JSON
+    // Extract just the meaningful part if it's a "bad response from server" wrapper
+    if lower.contains("bad response from server") {
+        // Try to extract the inner message
+        if let Some(msg_start) = error_str.find("\"message\":") {
+            let after_msg = &error_str[msg_start + 11..];
+            if let Some(quote_start) = after_msg.find('"') {
+                let after_quote = &after_msg[quote_start + 1..];
+                if let Some(quote_end) = after_quote.find('"') {
+                    let inner_msg = &after_quote[..quote_end];
+                    if !inner_msg.is_empty() {
+                        return format!("⚠️ {}", inner_msg);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Last resort: truncate the error to something reasonable
+    let clean = if error_str.len() > 120 {
+        format!("⚠️ {}", &error_str[..120])
+    } else {
+        format!("⚠️ {}", error_str)
+    };
+    clean
 }
 
 #[cfg(test)]
