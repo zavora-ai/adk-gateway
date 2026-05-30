@@ -3,8 +3,18 @@
 version = 4
 
 [[package]]
+name = "a2a-protocol-types"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47e4fe91cf2436cef079cf2f00bb208344d63a5a8030fc77c96812b304404e8b"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "adk-acp"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "agent-client-protocol",
@@ -20,7 +30,7 @@ dependencies = [
 
 [[package]]
 name = "adk-agent"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "adk-skill",
@@ -36,7 +46,7 @@ dependencies = [
 
 [[package]]
 name = "adk-anthropic"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -52,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "adk-artifact"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -62,13 +72,15 @@ dependencies = [
 
 [[package]]
 name = "adk-auth"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "async-trait",
  "chrono",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -76,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "adk-awp"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "arc-swap",
@@ -102,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "adk-browser"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -117,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "adk-core"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -132,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "adk-deploy"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -153,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "adk-eval"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "adk-model",
@@ -251,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "adk-gemini"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -277,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "adk-graph"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "async-stream",
@@ -294,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "adk-guardrail"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -309,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "adk-memory"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -321,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "adk-model"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-anthropic",
  "adk-core",
@@ -345,7 +357,7 @@ dependencies = [
 
 [[package]]
 name = "adk-plugin"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "serde_json",
@@ -355,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "adk-runner"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-artifact",
  "adk-core",
@@ -376,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-agent",
  "adk-anthropic",
@@ -405,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "adk-rust-macros"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -414,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "adk-sandbox"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -428,8 +440,9 @@ dependencies = [
 
 [[package]]
 name = "adk-server"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
+ "a2a-protocol-types",
  "adk-agent",
  "adk-artifact",
  "adk-core",
@@ -460,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "adk-session"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "async-trait",
@@ -473,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "adk-skill"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "adk-plugin",
@@ -487,7 +500,7 @@ dependencies = [
 
 [[package]]
 name = "adk-telemetry"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "thiserror 2.0.18",
  "tracing",
@@ -496,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "adk-tool"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "adk-core",
  "adk-rust-macros",
@@ -860,7 +873,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "awp-types"
-version = "0.8.4"
+version = "0.9.2"
 dependencies = [
  "chrono",
  "serde",
