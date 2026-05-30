@@ -51,7 +51,11 @@ pub struct ActiveTask {
 /// 1. **Pending** — waiting in a FIFO queue for an execution slot
 /// 2. **Active** — holding a semaphore permit, currently executing
 ///
-/// A background processor moves tasks from pending to active as slots open.
+/// The `TaskExecutor` is the single consumer: it calls `try_dequeue()` to move
+/// tasks from pending to active and then executes them. The queue itself does
+/// NOT spawn a background processor — doing so would create a second consumer
+/// that races with the executor and strands tasks in `active` without running
+/// them.
 pub struct TaskQueue {
     /// Pending tasks waiting for a slot.
     pending: Mutex<VecDeque<QueuedTask>>,
@@ -61,7 +65,8 @@ pub struct TaskQueue {
     max_concurrent: u32,
     /// Semaphore for slot management.
     slots: Arc<Semaphore>,
-    /// Notifier to wake the background processor when new tasks are enqueued.
+    /// Notifier woken when new tasks are enqueued or slots freed.
+    /// The `TaskExecutor` can await this to avoid busy-polling.
     notify: Arc<Notify>,
 }
 
@@ -81,13 +86,22 @@ impl TaskQueue {
             notify: Arc::new(Notify::new()),
         });
 
-        // Spawn background processor
-        let queue_clone = Arc::clone(&queue);
-        tokio::spawn(async move {
-            queue_clone.background_processor().await;
-        });
+        // NOTE: We intentionally do NOT spawn a background processor here.
+        // The TaskExecutor is the single consumer of try_dequeue() — it moves
+        // tasks from pending to active AND executes them. A second consumer
+        // (a queue-internal processor) would race with the executor, win the
+        // dequeue, and leave tasks stranded in `active` holding a permit but
+        // never executing. See GAP A in the autonomous-operation investigation.
 
         queue
+    }
+
+    /// Returns a clone of the notifier used to signal new work.
+    ///
+    /// The `TaskExecutor` can await this to be woken when a task is enqueued
+    /// or a slot is freed, avoiding a busy-poll loop.
+    pub fn notifier(&self) -> Arc<Notify> {
+        self.notify.clone()
     }
 
     /// Enqueues a task for execution. Returns the generated `TaskId`.
@@ -214,21 +228,6 @@ impl TaskQueue {
     pub fn active_tasks(&self) -> &DashMap<TaskId, ActiveTask> {
         &self.active
     }
-
-    /// Background processor that moves pending tasks to active as slots open.
-    async fn background_processor(&self) {
-        loop {
-            // Wait for notification (new task enqueued or slot freed)
-            self.notify.notified().await;
-
-            // Try to dequeue as many tasks as possible
-            loop {
-                if self.try_dequeue().await.is_none() {
-                    break;
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -275,12 +274,11 @@ mod tests {
             .await;
 
         assert!(!task_id.is_empty());
-        // Give background processor a moment to pick it up
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        // Task should have been moved to active by background processor
-        // since there are available slots
-        assert_eq!(queue.active_count(), 1);
+        // The queue no longer auto-dequeues — the task stays pending until the
+        // TaskExecutor calls try_dequeue(). This is the single-consumer model.
+        assert_eq!(queue.pending_count().await, 1);
+        assert_eq!(queue.active_count(), 0);
     }
 
     #[tokio::test]
@@ -480,45 +478,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_background_processor_dequeues_on_enqueue() {
+    async fn test_executor_is_single_consumer_via_try_dequeue() {
+        // The queue no longer auto-dequeues; the TaskExecutor drives try_dequeue.
+        // Verify enqueue leaves the task pending until try_dequeue is called.
         let queue = TaskQueue::new(Some(3));
 
-        // Enqueue via the public API — background processor should pick it up
         let task_id = queue
-            .enqueue("agent-1".to_string(), make_request("auto-dequeue test"))
+            .enqueue("agent-1".to_string(), make_request("manual-dequeue test"))
             .await;
 
-        // Give the background processor time to process
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Without a consumer calling try_dequeue, the task stays pending.
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(queue.active_count(), 0);
+        assert_eq!(queue.pending_count().await, 1);
 
+        // The executor's dequeue moves it to active.
+        let dequeued = queue.try_dequeue().await;
+        assert_eq!(dequeued, Some(task_id.clone()));
         assert_eq!(queue.active_count(), 1);
         assert_eq!(queue.pending_count().await, 0);
         assert!(queue.active_tasks().contains_key(&task_id));
     }
 
     #[tokio::test]
-    async fn test_background_processor_dequeues_on_completion() {
+    async fn test_slot_frees_on_completion_allows_next_dequeue() {
         let queue = TaskQueue::new(Some(1));
 
-        // Fill the single slot
+        // Fill the single slot via try_dequeue (executor behavior)
         let task_id_1 = queue
             .enqueue("agent-1".to_string(), make_request("task 1"))
             .await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(queue.try_dequeue().await, Some(task_id_1.clone()));
         assert_eq!(queue.active_count(), 1);
 
-        // Enqueue another — should stay pending
+        // Enqueue another — no free slot, so try_dequeue returns None
         let _task_id_2 = queue
             .enqueue("agent-1".to_string(), make_request("task 2"))
             .await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert!(queue.try_dequeue().await.is_none());
         assert_eq!(queue.active_count(), 1);
         assert_eq!(queue.pending_count().await, 1);
 
-        // Complete the first task — background processor should pick up the second
+        // Complete the first task — slot frees, next dequeue succeeds
         queue.complete_task(&task_id_1);
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
+        assert!(queue.try_dequeue().await.is_some());
         assert_eq!(queue.active_count(), 1);
         assert_eq!(queue.pending_count().await, 0);
     }

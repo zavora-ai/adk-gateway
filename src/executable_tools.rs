@@ -1323,7 +1323,7 @@ pub fn build_coding_agent_delegation_tool(
     Arc::new(FunctionTool::new(
         "delegate_to_coding_agent",
         "Delegate a coding task to a registered coding agent (e.g., Claude Code, Kiro CLI, Codex). The agent executes the task in a real workspace with filesystem access — writing code, running commands, creating files. Use coding_agent_list first to see available agents. NOT for creating new agents — use agent_create for that.",
-        move |_ctx: Arc<dyn ToolContext>, args: Value| {
+        move |ctx: Arc<dyn ToolContext>, args: Value| {
             let delegator = delegator.clone();
             async move {
                 let agent = args.get("agent")
@@ -1342,6 +1342,15 @@ pub fn build_coding_agent_delegation_tool(
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|v| v.as_str().map(std::path::PathBuf::from)).collect());
 
+                // Derive the reply target from the calling user's context so the
+                // agent's results stream back to the user who requested them.
+                // user_id format is "{channel_type}:{sender_id}" (see session_bridge).
+                let user_id = ctx.user_id().to_string();
+                let (channel_type, channel_id) = match user_id.split_once(':') {
+                    Some((ct, id)) => (ct.to_string(), id.to_string()),
+                    None => ("internal".to_string(), "system".to_string()),
+                };
+
                 let request = crate::coding_agent::models::TaskRequest {
                     description: task.to_string(),
                     trigger: crate::coding_agent::models::TaskTrigger::AgentDelegation {
@@ -1350,8 +1359,8 @@ pub fn build_coding_agent_delegation_tool(
                     workspace,
                     file_context,
                     reply_to: crate::coding_agent::models::ReplyTarget {
-                        channel_type: "internal".to_string(),
-                        channel_id: "system".to_string(),
+                        channel_type,
+                        channel_id,
                         message_id: None,
                     },
                 };
@@ -1361,7 +1370,7 @@ pub fn build_coding_agent_delegation_tool(
                         "status": "queued",
                         "task_id": task_id,
                         "agent": agent,
-                        "message": format!("Task delegated to '{}'. Task ID: {}", agent, task_id)
+                        "message": format!("Task delegated to '{}'. The agent is now working and will stream progress and results directly to this chat. Task ID: {}", agent, task_id)
                     })),
                     Err(e) => Ok(serde_json::json!({
                         "status": "error",

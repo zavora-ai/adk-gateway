@@ -121,33 +121,32 @@ impl StreamingTaskExecutor {
         // Build message ref from request
         let msg_ref = msg_ref_from_request(request);
 
-        // Look up the channel for delivery
+        // Look up the channel for delivery (best-effort).
+        // If no channel is found (e.g. cron/internal triggers, or the channel
+        // isn't registered yet), we STILL execute the task — we just skip live
+        // streaming. The result is returned and recorded in task history either
+        // way. Failing here would mean the agent never runs at all.
         let channel_key = ChannelKey {
             channel_type: msg_ref.channel_type,
             account_id: msg_ref.account_id.clone(),
         };
+        let delivery = self.channel_map.get(&channel_key)
+            .map(|c| select_strategy(c.value().clone(), Some("partial")));
 
-        let channel = self.channel_map.get(&channel_key)
-            .map(|c| c.value().clone())
-            .ok_or_else(|| {
-                warn!(
-                    channel_type = ?msg_ref.channel_type,
-                    account_id = %msg_ref.account_id,
-                    "Channel not found for delivery"
-                );
-                TaskError::ExecutionError {
-                    message: format!("Channel {:?}/{} not found", msg_ref.channel_type, msg_ref.account_id),
-                    partial_output: None,
-                }
-            })?;
-
-        // Create delivery strategy (streaming if channel supports editing)
-        let delivery = select_strategy(channel, Some("partial"));
+        if delivery.is_none() {
+            warn!(
+                channel_type = ?msg_ref.channel_type,
+                account_id = %msg_ref.account_id,
+                recipient = %msg_ref.recipient_id,
+                "No delivery channel found — task will execute without live streaming"
+            );
+        }
 
         info!(
             agent_id = %agent_id,
             channel_type = ?msg_ref.channel_type,
             recipient = %msg_ref.recipient_id,
+            has_delivery = delivery.is_some(),
             "Starting streaming task execution"
         );
 
@@ -156,14 +155,11 @@ impl StreamingTaskExecutor {
             .execute_streaming(agent_id, &agent.config, request)
             .await?;
 
-        // Process updates and forward to delivery
-        let result = self.process_stream(
-            &mut stream,
-            delivery,
-            msg_ref,
-        ).await;
-
-        result
+        // Process updates, forwarding to delivery if available
+        match delivery {
+            Some(delivery) => self.process_stream(&mut stream, delivery, msg_ref).await,
+            None => self.process_stream_no_delivery(&mut stream).await,
+        }
     }
 
     /// Execute without looking up channel - use provided delivery strategy.
@@ -287,6 +283,51 @@ impl StreamingTaskExecutor {
 
         // Stream ended without Done - shouldn't happen but handle gracefully
         error!("ACP stream ended unexpectedly without Done update");
+        Err(TaskError::ExecutionError {
+            message: "Stream ended unexpectedly".to_string(),
+            partial_output: if accumulated_text.is_empty() { None } else { Some(accumulated_text) },
+        })
+    }
+
+    /// Process the update stream without a delivery channel.
+    ///
+    /// Used when no channel is available (cron/internal triggers, or the
+    /// channel isn't registered). The task still executes fully and the result
+    /// is returned for recording in task history — there's just no live
+    /// streaming to a user.
+    async fn process_stream_no_delivery(
+        &self,
+        stream: &mut CodingAgentUpdateStream,
+    ) -> Result<TaskResult, TaskError> {
+        let mut accumulated_text = String::new();
+
+        while let Some(update) = stream.recv().await {
+            match update {
+                CodingAgentUpdate::Text(text) => {
+                    accumulated_text.push_str(&text);
+                }
+                CodingAgentUpdate::Done { output, duration, success, error } => {
+                    if success {
+                        return Ok(TaskResult {
+                            output,
+                            modified_files: vec![],
+                            duration_ms: duration.as_millis() as u64,
+                            token_usage: None,
+                        });
+                    } else {
+                        let error_msg = error.unwrap_or_else(|| "Unknown error".to_string());
+                        return Err(TaskError::ExecutionError {
+                            message: error_msg,
+                            partial_output: if output.is_empty() { None } else { Some(output) },
+                        });
+                    }
+                }
+                // Other updates (status, tool calls, thoughts) are ignored — no delivery target.
+                _ => {}
+            }
+        }
+
+        error!("ACP stream ended unexpectedly without Done update (no-delivery path)");
         Err(TaskError::ExecutionError {
             message: "Stream ended unexpectedly".to_string(),
             partial_output: if accumulated_text.is_empty() { None } else { Some(accumulated_text) },
