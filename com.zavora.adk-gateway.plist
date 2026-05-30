@@ -9,7 +9,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>source /Users/jameskaranja/.openclaw/env.sh &amp;&amp; exec /usr/local/bin/adk-gateway --config /Users/jameskaranja/.openclaw/openclaw.json</string>
+        <string>source /Users/jameskaranja/.adk-gateway/env.sh &amp;&amp; exec /usr/local/bin/adk-gateway --config /Users/jameskaranja/.adk-gateway/gateway.json</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -22,10 +22,10 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jameskaranja/.openclaw/logs/adk-gateway.stdout.log</string>
+    <string>/Users/jameskaranja/.adk-gateway/logs/adk-gateway.stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jameskaranja/.openclaw/logs/adk-gateway.stderr.log</string>
+    <string>/Users/jameskaranja/.adk-gateway/logs/adk-gateway.stderr.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>

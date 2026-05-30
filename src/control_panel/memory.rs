@@ -124,7 +124,7 @@ pub(crate) async fn memory_save(
 /// Checks multiple locations in order:
 /// 1. Absolute path → use directly
 /// 2. Relative to CWD (project root when started with `cargo run`)
-/// 3. Relative to config file parent (e.g. ~/.openclaw/)
+/// 3. Relative to config file parent (e.g. ~/.adk-gateway/)
 fn resolve_memory_path(protocol_path: &str, config_path: Option<&std::path::Path>) -> std::path::PathBuf {
     let p = std::path::Path::new(protocol_path);
 

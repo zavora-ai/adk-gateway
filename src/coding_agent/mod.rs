@@ -1,7 +1,7 @@
 //! Coding Agent Integration subsystem.
 //!
 //! Provides lifecycle management for external coding agents (Kiro CLI, Claude Code,
-//! OpenCode, Pi Agent, OpenClaw, Hermes, GitHub Copilot CLI). Extends the existing
+//! OpenCode, Pi Agent, Hermes, GitHub Copilot CLI). Extends the existing
 //! ACP scaffolding with registration, monitoring, task orchestration, cost tracking,
 //! and multi-channel result delivery.
 //!

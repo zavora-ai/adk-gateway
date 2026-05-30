@@ -1,7 +1,7 @@
-//! OpenClaw-compatible JSON5 configuration.
+//! Gateway JSON5 configuration.
 //!
-//! Reads `~/.openclaw/openclaw.json` by default, supporting the same
-//! schema so users can migrate from OpenClaw without changing their config.
+//! Reads `~/.adk-gateway/gateway.json` by default. Also supports
+//! legacy `~/.openclaw/openclaw.json` for backward compatibility.
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ pub enum ConfigError {
     InvalidMaxIterations(u32),
 }
 
-/// Top-level config — mirrors OpenClaw's `openclaw.json` structure.
+/// Top-level gateway configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -469,7 +469,7 @@ pub struct AgentDefaults {
 impl Default for AgentDefaults {
     fn default() -> Self {
         Self {
-            workspace: "~/.openclaw/workspace".into(),
+            workspace: "~/.adk-gateway/workspace".into(),
             model: None,
             thinking_level: None,
         }
@@ -1259,7 +1259,7 @@ pub struct MemoryConfig {
     #[serde(default = "default_protocol_path", rename = "protocolPath")]
     pub protocol_path: PathBuf,
     /// Directory containing persistent context files (PROFILE.md, USER.md, etc.).
-    /// Defaults to ".openclaw" relative to the config file.
+    /// Defaults to "context" relative to the config file.
     #[serde(default = "default_context_dir", rename = "contextDir")]
     pub context_dir: PathBuf,
 }
@@ -1605,12 +1605,24 @@ pub enum ActionType {
 
 // ── Loading ────────────────────────────────────────────────────────
 
-/// Default config path: `~/.openclaw/openclaw.json`
+/// Default config path: `~/.adk-gateway/gateway.json`
+///
+/// Falls back to `~/.openclaw/openclaw.json` if the new path doesn't exist
+/// (backward compatibility for existing installations).
 pub fn default_config_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".openclaw")
-        .join("openclaw.json")
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let new_path = home.join(".adk-gateway").join("gateway.json");
+    if new_path.exists() {
+        return new_path;
+    }
+    // Backward compat: check legacy path
+    let legacy_path = home.join(".openclaw").join("openclaw.json");
+    if legacy_path.exists() {
+        tracing::info!("using legacy config path ~/.openclaw/openclaw.json — consider migrating to ~/.adk-gateway/gateway.json");
+        return legacy_path;
+    }
+    // Neither exists — use new path (will be created on first run)
+    new_path
 }
 
 /// Load and parse JSON5 config with env var substitution.

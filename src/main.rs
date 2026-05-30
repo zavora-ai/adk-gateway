@@ -1,6 +1,6 @@
 //! adk-gateway — Multi-channel AI gateway for adk-rust agents
 //!
-//! OpenClaw-compatible configuration. Connects Telegram, Slack, and more
+//! Multi-channel configuration. Connects Telegram, Slack, and more
 //! to your adk-rust agents via a single long-running binary.
 //!
 //! This binary uses the `adk_gateway` library crate for all functionality.
@@ -27,7 +27,7 @@ use tracing_subscriber::EnvFilter;
     about = "Multi-channel AI gateway for adk-rust agents"
 )]
 struct Cli {
-    /// Path to config file (default: ~/.openclaw/openclaw.json)
+    /// Path to config file (default: ~/.adk-gateway/gateway.json)
     #[arg(short, long, global = true)]
     config: Option<PathBuf>,
 

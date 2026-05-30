@@ -306,7 +306,7 @@ fn format_agent_error(error: &adk_core::AdkError) -> String {
     
     // Model not found
     if lower.contains("not found") && (lower.contains("model") || lower.contains("models/")) {
-        return "⚠️ Model not available.\n\nThe configured model may have been deprecated. Update the model in openclaw.json.".to_string();
+        return "⚠️ Model not available.\n\nThe configured model may have been deprecated. Update the model in gateway.json.".to_string();
     }
     
     // Context too long

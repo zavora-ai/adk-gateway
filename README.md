@@ -23,7 +23,7 @@ The wizard walks you through:
 2. Setting API keys
 3. Connecting a channel (Telegram, Slack, WhatsApp, Discord, or Matrix)
 
-Config is saved to `~/.openclaw/openclaw.json` and hot-reloads on edit.
+Config is saved to `~/.adk-gateway/gateway.json` and hot-reloads on edit.
 
 ## Features
 
@@ -162,7 +162,7 @@ cargo build --release
 
 ```bash
 docker build -t adk-gateway .
-docker run -v ~/.openclaw:/config -p 18789:18789 adk-gateway
+docker run -v ~/.adk-gateway:/config -p 18789:18789 adk-gateway
 ```
 
 **Systemd:**

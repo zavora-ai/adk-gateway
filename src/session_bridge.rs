@@ -1,6 +1,6 @@
 //! Bridge between gateway channel sessions and adk-session.
 //!
-//! Maps OpenClaw's session scoping model (per-channel-peer, per-peer, etc.)
+//! Maps adk-gateway's session scoping model (per-channel-peer, per-peer, etc.)
 //! to adk-session's (app_name, user_id, session_id) triple.
 //!
 //! The bridge accepts a pluggable `SessionService` backend (R6.1) and
@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Manages session ID generation and lifecycle based on OpenClaw scoping rules.
+/// Manages session ID generation and lifecycle based on adk-gateway scoping rules.
 ///
 /// Wraps a pluggable `SessionService` backend and maintains an in-memory
 /// index of active sessions for fast lookups and status reporting.

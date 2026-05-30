@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Config file: `~/.openclaw/openclaw.json` (JSON5 format)
+Config file: `~/.adk-gateway/gateway.json` (JSON5 format)
 
 Override with: `adk-gateway --config /path/to/config.json`
 
@@ -287,7 +287,7 @@ Session-integrated heartbeat with full conversation context (replaces cron-based
 {
   "agents": {
     "defaults": {
-      "workspace": "~/.openclaw/workspace",
+      "workspace": "~/.adk-gateway/workspace",
       "model": "anthropic/claude-sonnet-4",
       "thinkingLevel": "medium"
     },

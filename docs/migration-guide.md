@@ -1,8 +1,8 @@
-# Migration Guide: OpenClaw → adk-gateway
+# Migration Guide: adk-gateway → adk-gateway
 
 ## Overview
 
-adk-gateway is a drop-in replacement for OpenClaw with the same JSON5 configuration format. Most configs work without changes.
+adk-gateway is a drop-in replacement for adk-gateway with the same JSON5 configuration format. Most configs work without changes.
 
 ## Steps
 
@@ -11,7 +11,7 @@ adk-gateway is a drop-in replacement for OpenClaw with the same JSON5 configurat
    cargo install adk-gateway
    ```
 
-2. **Use your existing config** — adk-gateway reads `~/.openclaw/openclaw.json` by default.
+2. **Use your existing config** — adk-gateway reads `~/.adk-gateway/gateway.json` by default.
 
 3. **Environment variables** — `${VAR_NAME}` expansion works identically.
 
@@ -22,10 +22,10 @@ adk-gateway is a drop-in replacement for OpenClaw with the same JSON5 configurat
 
 ## Config Differences
 
-| Feature | OpenClaw | adk-gateway |
+| Feature | adk-gateway | adk-gateway |
 |---------|----------|-------------|
 | Config format | JSON5 | JSON5 (same) |
-| Default path | `~/.openclaw/openclaw.json` | `~/.openclaw/openclaw.json` (same) |
+| Default path | `~/.adk-gateway/gateway.json` | `~/.adk-gateway/gateway.json` (same) |
 | Session backends | In-memory only | InMemory, SQLite, Postgres, Redis, Firestore |
 | Memory/KG | Not supported | Full knowledge graph with 9 tools |
 | RAG | Not supported | Vector store + chunking pipeline |
@@ -56,4 +56,4 @@ These are optional — your existing config works without them:
 
 ## Breaking Changes
 
-None. adk-gateway is fully backward-compatible with OpenClaw configurations.
+None. adk-gateway is fully backward-compatible with adk-gateway configurations.

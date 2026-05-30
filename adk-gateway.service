@@ -41,7 +41,7 @@ Group=adk-gateway
 WorkingDirectory=/opt/adk-gateway
 
 # Binary path and arguments
-ExecStart=/usr/local/bin/adk-gateway --config /etc/adk-gateway/openclaw.json
+ExecStart=/usr/local/bin/adk-gateway --config /etc/adk-gateway/gateway.json
 
 # ─── Graceful Shutdown ──────────────────────────────────────────────────────
 # Send SIGTERM for graceful shutdown (drain in-flight requests)
@@ -106,7 +106,7 @@ SystemCallErrorNumber=EPERM
 
 # ─── Environment ────────────────────────────────────────────────────────────
 # Configuration file path
-Environment=ADK_CONFIG_PATH=/etc/adk-gateway/openclaw.json
+Environment=ADK_CONFIG_PATH=/etc/adk-gateway/gateway.json
 
 # Log format: json (structured, default) or pretty (human-readable)
 Environment=LOG_FORMAT=json

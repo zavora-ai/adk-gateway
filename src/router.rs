@@ -1,5 +1,5 @@
 //! Message router — resolves which agent handles an inbound message
-//! based on routing bindings (OpenClaw-compatible) and agent-level
+//! based on routing bindings (adk-gateway-compatible) and agent-level
 //! channel bindings from AgentConfig.
 
 use crate::agent_config::ChannelBinding;
@@ -21,11 +21,11 @@ pub struct AgentBinding {
 /// 1. Exact match: channel + accountId + peer
 /// 2. Channel + accountId match
 /// 3. Channel-only match
-/// 4. Legacy OpenClaw routing bindings
+/// 4. Legacy adk-gateway routing bindings
 /// 5. Default agent (system)
 #[derive(Clone)]
 pub struct MessageRouter {
-    /// Legacy OpenClaw routing bindings from config.
+    /// Legacy adk-gateway routing bindings from config.
     bindings: Vec<RoutingBinding>,
     /// Agent-level routing bindings from AgentConfig.channel_bindings.
     agent_bindings: Vec<AgentBinding>,
@@ -78,7 +78,7 @@ impl MessageRouter {
     /// 1. Exact match on agent bindings: channel + account_id + peer
     /// 2. Channel + account_id match on agent bindings
     /// 3. Channel-only match on agent bindings
-    /// 4. Legacy OpenClaw routing bindings
+    /// 4. Legacy adk-gateway routing bindings
     /// 5. Default agent
     pub fn resolve_agent(&self, msg: &InboundMessage) -> &str {
         let channel_name = msg.channel_type.to_string();
@@ -140,7 +140,7 @@ impl MessageRouter {
             return &ab.agent_id;
         }
 
-        // Phase 4: legacy OpenClaw routing bindings
+        // Phase 4: legacy adk-gateway routing bindings
         for binding in &self.bindings {
             let channel_matches = binding
                 .match_rule

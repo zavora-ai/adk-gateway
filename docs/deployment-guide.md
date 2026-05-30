@@ -106,7 +106,7 @@ sudo chown adk-gateway:adk-gateway /var/log/adk-gateway /var/lib/adk-gateway
 sudo cp target/release/adk-gateway /usr/local/bin/
 
 # Install config
-sudo cp openclaw.json /etc/adk-gateway/
+sudo cp gateway.json /etc/adk-gateway/
 
 # Create environment file for secrets
 sudo tee /etc/adk-gateway/environment << 'EOF'
@@ -156,15 +156,15 @@ The project includes `com.zavora.adk-gateway.plist` using the `env.sh` pattern f
 sudo cp target/release/adk-gateway /usr/local/bin/
 
 # Create env.sh with your secrets
-cat > ~/.openclaw/env.sh << 'EOF'
+cat > ~/.adk-gateway/env.sh << 'EOF'
 export GOOGLE_API_KEY="your-key"
 export TELEGRAM_BOT_TOKEN="your-token"
 export ANTHROPIC_API_KEY="your-key"
 EOF
-chmod 600 ~/.openclaw/env.sh
+chmod 600 ~/.adk-gateway/env.sh
 
 # Create log directory
-mkdir -p ~/.openclaw/logs
+mkdir -p ~/.adk-gateway/logs
 
 # Install plist
 cp com.zavora.adk-gateway.plist ~/Library/LaunchAgents/
@@ -175,7 +175,7 @@ launchctl load ~/Library/LaunchAgents/com.zavora.adk-gateway.plist
 
 ### How It Works
 
-The plist uses `/bin/bash -c "source ~/.openclaw/env.sh && exec adk-gateway ..."` to inject environment variables before starting the gateway. This avoids the macOS limitation where launchd agents don't inherit shell environment.
+The plist uses `/bin/bash -c "source ~/.adk-gateway/env.sh && exec adk-gateway ..."` to inject environment variables before starting the gateway. This avoids the macOS limitation where launchd agents don't inherit shell environment.
 
 ### Commands
 
@@ -190,8 +190,8 @@ launchctl unload ~/Library/LaunchAgents/com.zavora.adk-gateway.plist
 launchctl load ~/Library/LaunchAgents/com.zavora.adk-gateway.plist
 
 # Logs
-tail -f ~/.openclaw/logs/adk-gateway.stdout.log
-tail -f ~/.openclaw/logs/adk-gateway.stderr.log
+tail -f ~/.adk-gateway/logs/adk-gateway.stdout.log
+tail -f ~/.adk-gateway/logs/adk-gateway.stderr.log
 ```
 
 ---
@@ -289,7 +289,7 @@ adk-gateway config encrypt
 ```
 
 This:
-1. Generates a 32-byte key file at `~/.openclaw/encryption.key`
+1. Generates a 32-byte key file at `~/.adk-gateway/encryption.key`
 2. Scans config for sensitive fields (tokens, API keys, passwords)
 3. Encrypts values in-place with `enc:` prefix
 4. Adds `gateway.encryption.keyFile` to config
@@ -368,7 +368,7 @@ export GATEWAY_AUTH_TOKEN=my-secret
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ADK_CONFIG_PATH` | `~/.openclaw/openclaw.json` | Config file path |
+| `ADK_CONFIG_PATH` | `~/.adk-gateway/gateway.json` | Config file path |
 | `ADK_GATEWAY_PORT` | `18789` | Listen port (Docker default: 3000) |
 | `ADK_DRAIN_TIMEOUT_SECS` | `30` | Graceful shutdown drain timeout |
 | `LOG_FORMAT` | `json` | Log format: `json` or `pretty` |
