@@ -197,15 +197,15 @@ export const api = {
   getRateLimitConfig: () => request<import('../types').RateLimitConfig>('/settings/rate-limit'),
   saveRateLimitConfig: (config: import('../types').RateLimitConfig) =>
     request<void>('/settings/rate-limit', { method: 'POST', body: JSON.stringify(config) }),
-  getRateLimitMetrics: () => request<import('../types').RateLimitMetrics>('/metrics/rate-limit'),
+  getRateLimitMetrics: () => request<import('../types').RateLimitMetrics>('/settings/rate-limit/metrics'),
 
   // ACP Integration (Task 17)
-  getAcpAgents: () => request<import('../types').AcpAgentInfo[]>('/integrations/acp'),
+  getAcpAgents: () => request<import('../types').AcpAgentInfo[]>('/acp/agents'),
   addAcpAgent: (agent: import('../types').AcpAgentForm) =>
-    request<void>('/integrations/acp', { method: 'POST', body: JSON.stringify(agent) }),
+    request<void>('/acp/agents', { method: 'POST', body: JSON.stringify(agent) }),
   removeAcpAgent: (name: string) =>
-    request<void>(`/integrations/acp/${encodeURIComponent(name)}`, { method: 'DELETE' }),
-  getAcpFeatureEnabled: () => request<{ enabled: boolean }>('/integrations/acp/status'),
+    request<void>(`/acp/agents/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  getAcpFeatureEnabled: () => request<{ enabled: boolean }>('/acp/enabled'),
 
   // Health Monitor (Task 18)
   getHealthComponents: () => request<import('../types').HealthComponent[]>('/health/components'),
@@ -225,11 +225,11 @@ export const api = {
     request<void>('/users/groups', { method: 'POST', body: JSON.stringify(assignment) }),
 
   // Config Encryption (Task 20)
-  getEncryptionStatus: () => request<import('../types').EncryptionStatus>('/settings/encryption/status'),
-  getSensitiveFields: () => request<import('../types').SensitiveField[]>('/settings/encryption/fields'),
-  encryptAll: () => request<void>('/settings/encryption/encrypt-all', { method: 'POST' }),
+  getEncryptionStatus: () => request<import('../types').EncryptionStatus>('/encryption/status'),
+  getSensitiveFields: () => request<import('../types').SensitiveField[]>('/encryption/sensitive-fields'),
+  encryptAll: () => request<void>('/encryption/encrypt-all', { method: 'POST' }),
   saveEncryptionKeyPath: (path: string) =>
-    request<void>('/settings/encryption/key-path', { method: 'POST', body: JSON.stringify({ path }) }),
+    request<void>('/encryption/key-path', { method: 'POST', body: JSON.stringify({ path }) }),
 
   // Log Rotation (Task 21)
   getLogRotationConfig: () => request<import('../types').LogRotationConfig>('/settings/log-rotation'),

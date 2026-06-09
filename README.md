@@ -81,7 +81,12 @@ A React + TypeScript SPA at `/ui` with:
 
 ```json5
 {
-  "agent": { "model": "google/gemini-2.5-pro" },
+  "agent": {
+    "model": {
+      "primary": "openai/gpt-5.4-mini",
+      "fallbacks": ["openai/gpt-5.4-nano"]
+    }
+  },
   "channels": {
     "telegram": {
       "botToken": "${TELEGRAM_BOT_TOKEN}",
@@ -132,8 +137,10 @@ adk-gateway config encrypt                # Encrypt sensitive config values in-p
 ## Development
 
 ```bash
-# From source (requires adk-rust as sibling for path deps during dev)
-git clone https://github.com/zavora-ai/adk-rust.git
+# From published crates (recommended)
+cargo install adk-gateway
+
+# From source
 git clone https://github.com/zavora-ai/adk-gateway.git
 cd adk-gateway
 
@@ -144,7 +151,7 @@ cd ui && npm install && npm run dev      # Proxies API to localhost:18789
 cargo run -- -v
 
 # Run tests
-cargo test --lib                         # 410+ unit tests
+cargo test --lib                         # 845+ unit tests
 cargo test --test properties             # 30+ property-based tests
 cargo test --test wiring_integration     # Integration tests
 ```
@@ -154,28 +161,28 @@ cargo test --test wiring_integration     # Integration tests
 Single binary deployment:
 
 ```bash
-cargo build --release
-./target/release/adk-gateway
+cargo install adk-gateway
+adk-gateway
 ```
 
 **Docker:**
 
 ```bash
 docker build -t adk-gateway .
-docker run -v ~/.adk-gateway:/config -p 18789:18789 adk-gateway
+docker run -v ~/.adk-gateway:/etc/adk-gateway -p 18789:18789 adk-gateway
 ```
 
-**Systemd:**
+**Systemd (Linux):**
 
 ```bash
-sudo cp adk-gateway.service /etc/systemd/system/
+sudo cp deploy/linux/adk-gateway.service /etc/systemd/system/
 sudo systemctl enable --now adk-gateway
 ```
 
 **Launchd (macOS):**
 
 ```bash
-cp com.zavora.adk-gateway.plist ~/Library/LaunchAgents/
+cp deploy/macos/com.zavora.adk-gateway.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.zavora.adk-gateway.plist
 ```
 

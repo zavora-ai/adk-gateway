@@ -11,7 +11,7 @@
 #
 # Run examples:
 #   docker run -p 3000:3000 -v ./config:/etc/adk-gateway adk-gateway
-#   docker run -e ADK_CONFIG_PATH=/etc/adk-gateway/openclaw.json adk-gateway
+#   docker run -e ADK_CONFIG_PATH=/etc/adk-gateway/gateway.json adk-gateway
 # =============================================================================
 
 # ─── Build Arguments ────────────────────────────────────────────────────────
@@ -116,11 +116,11 @@ COPY --from=builder /build/target/release/adk-gateway /usr/local/bin/adk-gateway
 # ─── Configuration ──────────────────────────────────────────────────────────
 # Configuration can be provided via:
 # 1. Environment variables (ADK_CONFIG_PATH, TELEGRAM_BOT_TOKEN, etc.)
-# 2. Mounted config file at /etc/adk-gateway/openclaw.json
+# 2. Mounted config file at /etc/adk-gateway/gateway.json
 # 3. Combination of both (env vars override file values)
 
 # Default config file path (can be overridden with ADK_CONFIG_PATH env var)
-ENV ADK_CONFIG_PATH=/etc/adk-gateway/openclaw.json
+ENV ADK_CONFIG_PATH=/etc/adk-gateway/gateway.json
 
 # Default port the gateway listens on
 ENV ADK_GATEWAY_PORT=3000
@@ -154,4 +154,4 @@ USER gateway
 ENTRYPOINT ["tini", "--"]
 
 # Start the gateway with config from environment
-CMD ["adk-gateway", "--config", "/etc/adk-gateway/openclaw.json"]
+CMD ["adk-gateway", "--config", "/etc/adk-gateway/gateway.json"]

@@ -55,6 +55,11 @@ Thumbs.db
 
 # Playwright MCP output
 tmp/playwright-mcp-output/
+.playwright-mcp/
+
+# UI build artifacts (handled by build.rs)
+ui/node_modules/
+ui/dist/
 
 # Logs
 *.log

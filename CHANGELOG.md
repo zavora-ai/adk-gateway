@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0] — 2026-06-09
+
+### Added
+
+- **OpenAI Model Support** — Full support for OpenAI models (GPT-5.4, GPT-4.1, o-series, Codex) as primary provider with automatic schema sanitization.
+- **OpenAI Schema Sanitizer** — Provider-aware sanitizer that converts tuple-style `items` arrays, array-typed `type` fields, and non-object parameter schemas to OpenAI-compatible format. Automatically applied for all `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `codex-*`, and `chatgpt-*` models.
+- **Tool Parameter Schemas** — All filesystem tools (`fs_list`, `fs_read`, `fs_tree`, `fs_search`) now include typed JSON Schema parameter definitions via `schemars`, ensuring LLMs know exactly what arguments are required.
+- **Autonomous Heartbeat** — Heartbeat system rewritten from passive status checker to autonomous work continuation. Resumes incomplete tasks, executes committed follow-ups, and only reports when work is done or blocked.
+- **Smart Empty Response Handling** — When the LLM produces no text, the gateway now distinguishes between max-iterations, tool-only responses, and model failures with context-appropriate user messages.
+- **Coding Agent Delegation** — `delegate_to_coding_agent` and `coding_agent_list` tools for delegating tasks to registered coding agents (Claude Code, Kiro CLI, Codex).
+
+### Changed
+
+- **Default model** changed from `anthropic/claude-sonnet-4` to `openai/gpt-5.4-mini` with `openai/gpt-5.4-nano` as fallback.
+- **Max iterations** default increased from 25 to 100 for complex tool-heavy workflows.
+- **Rate limiter defaults** relaxed: 100 calls/30s window (was 10/5s), 10 pauses before terminate (was 3).
+- **Config path** standardized to `~/.adk-gateway/gateway.json`. Legacy `~/.openclaw/` path support removed.
+- **Project version** bumped to 1.0.0 — all adk-rust dependencies now use published crates from crates.io (v1.0.0).
+- **Deploy files** moved to `deploy/` directory (macos/, linux/, scripts/).
+- **Example configs** renamed from `openclaw*.json` to `gateway*.json`.
+- **Base instruction** now instructs the agent to use `send_photo` for displaying screenshots/images in chat.
+
+### Fixed
+
+- **OpenAI schema validation** — MCP tools with tuple-style parameter schemas (e.g., `[{type:number},{type:number}]`) no longer cause 400 errors when using OpenAI models.
+- **Sanitizer not triggering** — Fixed provider detection for OpenAI models where the `openai/` prefix was stripped before reaching the sanitizer dispatch.
+- **Heartbeat spam** — Truncated responses like "HE" from the model are now suppressed (case-insensitive prefix matching + short-response filter).
+- **Empty response fallback** — No longer shows generic "couldn't generate a response" for tool-only turns; provides context-appropriate messages.
+- **fs_search errors** — LLM no longer calls `fs_search` without the required `query` parameter (schema now declares it as required).
+- **UI path mismatches** — Fixed 3 API client paths that didn't match backend routes (ACP agents, encryption, rate limit metrics).
+- **Unused import warnings** — Removed dead `HashMap` imports in `acp_client.rs` and `hitl_permissions.rs`.
+- **Test assertion** for `format_agent_error` updated to match actual `⚠️` prefix format.
+
+### Removed
+
+- Legacy `~/.openclaw/` config path fallback.
+- All `openclaw` references from source code, documentation, and comments.
+
 ## [0.8.2] — 2026-05-17
 
 ### Added

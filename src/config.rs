@@ -1,7 +1,6 @@
 //! Gateway JSON5 configuration.
 //!
-//! Reads `~/.adk-gateway/gateway.json` by default. Also supports
-//! legacy `~/.openclaw/openclaw.json` for backward compatibility.
+//! Reads `~/.adk-gateway/gateway.json` by default.
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -130,13 +129,18 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             model: CategoryConfig {
-                primary: ModelSpec::Simple("anthropic/claude-sonnet-4".into()),
+                primary: ModelSpec::WithFallbacks {
+                    primary: "openai/gpt-5.4-mini".into(),
+                    fallbacks: vec![
+                        "openai/gpt-5.4-nano".into(),
+                    ],
+                },
                 vision: None,
                 omni: None,
                 image_generation: None,
                 tts: None,
                 stt: None,
-                code: None,
+                code: Some(vec!["openai/codex-mini-latest".into()]),
                 embedding: None,
                 search: None,
                 music: None,
@@ -692,7 +696,7 @@ impl Default for HeartbeatV2Config {
         Self {
             enabled: true,
             default_interval_secs: 3600,
-            prompt: "System heartbeat check: Review the current context and check if anything needs attention. If nothing needs attention, reply with exactly HEARTBEAT_OK. If something needs attention, describe the issue clearly.".to_string(),
+            prompt: "System heartbeat: Check conversation history for any pending or incomplete work. If there is unfinished work, continue it autonomously using available tools — do not ask for permission. Report progress concisely. If all work is complete, reply with exactly HEARTBEAT_OK.".to_string(),
         }
     }
 }
@@ -800,7 +804,7 @@ pub struct GatewayRunnerConfig {
 impl Default for GatewayRunnerConfig {
     fn default() -> Self {
         Self {
-            max_iterations: 25,
+            max_iterations: 100,
         }
     }
 }
@@ -1606,22 +1610,13 @@ pub enum ActionType {
 // ── Loading ────────────────────────────────────────────────────────
 
 /// Default config path: `~/.adk-gateway/gateway.json`
-///
-/// Falls back to `~/.openclaw/openclaw.json` if the new path doesn't exist
-/// (backward compatibility for existing installations).
 pub fn default_config_path() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let new_path = home.join(".adk-gateway").join("gateway.json");
     if new_path.exists() {
         return new_path;
     }
-    // Backward compat: check legacy path
-    let legacy_path = home.join(".openclaw").join("openclaw.json");
-    if legacy_path.exists() {
-        tracing::info!("using legacy config path ~/.openclaw/openclaw.json — consider migrating to ~/.adk-gateway/gateway.json");
-        return legacy_path;
-    }
-    // Neither exists — use new path (will be created on first run)
+    // Path doesn't exist yet — use it anyway (will be created on first run)
     new_path
 }
 
@@ -1635,7 +1630,7 @@ pub fn load_config(path: &Path) -> anyhow::Result<GatewayConfig> {
             std::fs::create_dir_all(parent).ok();
         }
         let default_config = serde_json::json!({
-            "agent": { "model": { "primary": "google/gemini-2.5-pro" } },
+            "agent": { "model": { "primary": "openai/gpt-5.4-mini", "fallbacks": ["openai/gpt-5.4-nano"] } },
             "gateway": { "port": 18789, "bind": "loopback" },
             "telemetry": { "logDir": "logs" }
         });
@@ -1738,7 +1733,7 @@ mod tests {
     #[test]
     fn test_runner_config_default() {
         let cfg = GatewayRunnerConfig::default();
-        assert_eq!(cfg.max_iterations, 25);
+        assert_eq!(cfg.max_iterations, 100);
         assert!(cfg.validate().is_ok());
     }
 

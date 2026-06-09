@@ -321,6 +321,31 @@ impl Default for TaskHistory {
     }
 }
 
+// ── Shared history sink ────────────────────────────────────────────
+
+/// A sink that receives finalized task history entries.
+///
+/// This lets the `TaskExecutor` publish completed/failed task records to the
+/// SAME history stores that the control panel and the `coding_agent_task_status`
+/// tool read from. Without this, the executor's private `TaskHistory` would be
+/// invisible to status polling — a completed task would never be observable.
+pub trait TaskHistorySink: Send + Sync {
+    /// Record a finalized task entry.
+    fn record_entry(&self, entry: &TaskHistoryEntry);
+}
+
+impl TaskHistorySink for crate::coding_agent::history::TaskHistory {
+    fn record_entry(&self, entry: &TaskHistoryEntry) {
+        self.record(entry.clone());
+    }
+}
+
+impl TaskHistorySink for crate::coding_agent::history_db::PersistentTaskHistory {
+    fn record_entry(&self, entry: &TaskHistoryEntry) {
+        self.record(entry);
+    }
+}
+
 // ── TaskExecutor ───────────────────────────────────────────────────
 
 /// Core orchestration component for coding agent task execution.
@@ -342,6 +367,10 @@ pub struct TaskExecutor {
     cost_tracker: Arc<CostTracker>,
     /// Task history for audit trail.
     history: Arc<TaskHistory>,
+    /// Optional shared history sinks (control panel history + persistent DB).
+    /// The executor publishes finalized entries here so the status tool and
+    /// control panel can observe completed tasks.
+    history_sinks: Vec<Arc<dyn TaskHistorySink>>,
     /// The agent executor implementation (ACP in production, mock in tests).
     executor: Arc<dyn AgentExecutor>,
     /// Default timeout in seconds (from config).
@@ -368,11 +397,20 @@ impl TaskExecutor {
             registry,
             cost_tracker,
             history,
+            history_sinks: Vec::new(),
             executor,
             default_timeout_secs,
             approval_config,
             shutdown: Arc::new(Notify::new()),
         }
+    }
+
+    /// Attach a shared history sink (e.g. the control panel's `TaskHistory` or
+    /// the persistent SQLite store). Finalized task entries are published to all
+    /// attached sinks so they're observable by the status tool and control panel.
+    pub fn with_history_sink(mut self, sink: Arc<dyn TaskHistorySink>) -> Self {
+        self.history_sinks.push(sink);
+        self
     }
 
     /// Signal the executor to shut down gracefully.
@@ -707,7 +745,13 @@ impl TaskExecutor {
             created_at: now,
         };
 
-        self.history.record(history_entry);
+        self.history.record(history_entry.clone());
+
+        // Publish to shared sinks (control panel history + persistent DB) so
+        // the status tool and panel can observe this finalized task.
+        for sink in &self.history_sinks {
+            sink.record_entry(&history_entry);
+        }
 
         // Release the queue slot
         self.queue.complete_task(task_id);

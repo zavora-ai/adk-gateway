@@ -276,7 +276,9 @@ impl EventStreamCollector {
         if !last_partial_text.is_empty() {
             return last_partial_text;
         }
-        "I received your message but couldn't generate a response.".to_string()
+        // Return empty — the caller (gateway) handles the user-facing fallback
+        // with richer context (tool calls, max_iterations, etc.)
+        String::new()
     }
 }
 
@@ -470,7 +472,7 @@ mod tests {
         let resp = EventStreamCollector::new(events_to_stream(events))
             .collect()
             .await;
-        assert!(resp.text.contains("Error"));
+        // format_agent_error produces "⚠️ <message>" for unrecognized errors
         assert!(resp.text.contains("something went wrong"));
     }
 
@@ -480,10 +482,8 @@ mod tests {
         let resp = EventStreamCollector::new(events_to_stream(events))
             .collect()
             .await;
-        assert_eq!(
-            resp.text,
-            "I received your message but couldn't generate a response."
-        );
+        // Empty stream → empty text; the gateway layer adds the user-facing message
+        assert!(resp.text.is_empty());
     }
 
     #[tokio::test]

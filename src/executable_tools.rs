@@ -6,6 +6,7 @@
 
 use adk_core::ToolContext;
 use adk_tool::FunctionTool;
+use schemars::JsonSchema;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1487,6 +1488,44 @@ pub fn build_coding_agent_task_status_tool(
     ))
 }
 
+// ── Filesystem Tool Parameter Schemas ──────────────────────────────
+
+/// Parameters for fs_list tool.
+#[derive(serde::Serialize, JsonSchema)]
+struct FsListParams {
+    /// Path to list (relative to workspace root or absolute). Use '.' for root.
+    path: Option<String>,
+    /// Whether to show hidden files (starting with '.'). Default: false.
+    show_hidden: Option<bool>,
+}
+
+/// Parameters for fs_read tool.
+#[derive(serde::Serialize, JsonSchema)]
+struct FsReadParams {
+    /// Path to the file to read (relative to workspace root or absolute). Required.
+    path: String,
+}
+
+/// Parameters for fs_tree tool.
+#[derive(serde::Serialize, JsonSchema)]
+struct FsTreeParams {
+    /// Path to show tree for (relative to workspace root or absolute). Default: '.'.
+    path: Option<String>,
+    /// Maximum depth to recurse (default 2, max 5).
+    depth: Option<u64>,
+    /// Whether to show hidden files. Default: false.
+    show_hidden: Option<bool>,
+}
+
+/// Parameters for fs_search tool.
+#[derive(serde::Serialize, JsonSchema)]
+struct FsSearchParams {
+    /// The filename pattern to search for (case-insensitive substring match). Required.
+    query: String,
+    /// Optional subdirectory path to limit the search scope.
+    path: Option<String>,
+}
+
 fn fs_pwd_tool(root: PathBuf) -> FunctionTool {
     FunctionTool::new(
         "fs_pwd",
@@ -1567,6 +1606,7 @@ fn fs_list_tool(root: PathBuf) -> FunctionTool {
         },
     )
     .with_read_only(true)
+    .with_parameters_schema::<FsListParams>()
 }
 
 fn fs_read_tool(root: PathBuf) -> FunctionTool {
@@ -1628,6 +1668,7 @@ fn fs_read_tool(root: PathBuf) -> FunctionTool {
         },
     )
     .with_read_only(true)
+    .with_parameters_schema::<FsReadParams>()
 }
 
 fn fs_tree_tool(root: PathBuf) -> FunctionTool {
@@ -1720,6 +1761,7 @@ fn fs_tree_tool(root: PathBuf) -> FunctionTool {
         },
     )
     .with_read_only(true)
+    .with_parameters_schema::<FsTreeParams>()
 }
 
 fn fs_search_tool(root: PathBuf) -> FunctionTool {
@@ -1792,6 +1834,7 @@ fn fs_search_tool(root: PathBuf) -> FunctionTool {
         },
     )
     .with_read_only(true)
+    .with_parameters_schema::<FsSearchParams>()
 }
 
 // ── Channel Tools (send_photo) ─────────────────────────────────────

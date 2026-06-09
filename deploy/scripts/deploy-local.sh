@@ -83,6 +83,6 @@ done
 echo ""
 echo "ERROR: Health check failed after ${MAX_RETRIES} attempts."
 echo "Check logs:"
-echo "  tail -f ~/.openclaw/logs/adk-gateway.stdout.log"
-echo "  tail -f ~/.openclaw/logs/adk-gateway.stderr.log"
+echo "  tail -f ~/.adk-gateway/logs/adk-gateway.stdout.log"
+echo "  tail -f ~/.adk-gateway/logs/adk-gateway.stderr.log"
 exit 1

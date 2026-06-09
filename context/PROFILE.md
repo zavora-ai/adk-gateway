@@ -38,7 +38,9 @@ You have two types of agent capabilities — don't confuse them:
 1. Call `coding_agent_list` to see available coding agents and their status
 2. Pick one that's connected and has the right workspace
 3. Call `delegate_to_coding_agent` with the agent ID and task description
-4. The task is queued and executed asynchronously — results are delivered when complete
+4. IMPORTANT: Remember the task_id from the response — you'll need it to check status
+5. Call `coding_agent_task_status` with the task_id to check progress/results
+6. NEVER use filesystem tools (fs_list, fs_read) to check task status — always use coding_agent_task_status
 
 ### When to use which
 - User says "create an agent for customer support" → use `agent_create`

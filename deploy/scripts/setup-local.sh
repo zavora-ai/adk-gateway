@@ -10,20 +10,20 @@
 set -euo pipefail
 
 SERVICE_LABEL="com.zavora.adk-gateway"
-PLIST_SRC="$(cd "$(dirname "$0")/.." && pwd)/com.zavora.adk-gateway.plist"
+PLIST_SRC="$(cd "$(dirname "$0")/../macos" && pwd)/com.zavora.adk-gateway.plist"
 PLIST_DST="$HOME/Library/LaunchAgents/${SERVICE_LABEL}.plist"
-OPENCLAW_DIR="$HOME/.openclaw"
-LOGS_DIR="${OPENCLAW_DIR}/logs"
+GATEWAY_DIR="$HOME/.adk-gateway"
+LOGS_DIR="${GATEWAY_DIR}/logs"
 
 echo "=== adk-gateway local setup ==="
 echo ""
 
 # --- Create directories ---
 echo "Creating directories..."
-mkdir -p "${OPENCLAW_DIR}"
+mkdir -p "${GATEWAY_DIR}"
 mkdir -p "${LOGS_DIR}"
 mkdir -p "$HOME/Library/LaunchAgents"
-echo "  ${OPENCLAW_DIR}"
+echo "  ${GATEWAY_DIR}"
 echo "  ${LOGS_DIR}"
 echo ""
 
@@ -39,13 +39,13 @@ echo "  Installed: ${PLIST_DST}"
 echo ""
 
 # --- Verify config exists ---
-CONFIG_FILE="${OPENCLAW_DIR}/openclaw.json"
+CONFIG_FILE="${GATEWAY_DIR}/gateway.json"
 if [ -f "${CONFIG_FILE}" ]; then
     echo "Config found: ${CONFIG_FILE}"
 else
     echo "WARNING: Config not found at ${CONFIG_FILE}"
     echo "  Create it before starting the service."
-    echo "  See examples/openclaw.json for reference."
+    echo "  See examples/gateway.json for reference."
 fi
 echo ""
 

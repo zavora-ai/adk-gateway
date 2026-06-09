@@ -4,7 +4,6 @@
 //! inline keyboard buttons. Waits indefinitely for the user's response
 //! (no auto-deny timeout).
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use dashmap::DashMap;

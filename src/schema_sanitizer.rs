@@ -147,12 +147,193 @@ impl SchemaSanitizer for GeminiSanitizer {
     }
 }
 
-/// Identity sanitizer for providers that accept standard JSON Schema (OpenAI, Anthropic).
+/// Identity sanitizer for providers that accept standard JSON Schema (Anthropic, etc.).
 pub struct IdentitySanitizer;
 
 impl SchemaSanitizer for IdentitySanitizer {
     fn sanitize(&self, schema: &serde_json::Value) -> serde_json::Value {
         schema.clone()
+    }
+}
+
+/// OpenAI-specific sanitizer.
+///
+/// OpenAI requires:
+/// - Top-level parameters must be `type: "object"`
+/// - Array-typed `type` fields (e.g., `["string", "null"]`) are not supported;
+///   must use single type or be wrapped
+/// - Array-typed `items` (tuple validation) is not supported
+/// - `propertyNames` is not supported
+pub struct OpenAISanitizer;
+
+impl OpenAISanitizer {
+    fn sanitize_recursive(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut new_map = serde_json::Map::new();
+
+                // Handle array-typed `type` field: ["string", "null"] → type: "string"
+                // OpenAI doesn't support array types; just use the first non-null type
+                let mut resolved_type: Option<String> = None;
+
+                if let Some(type_val) = map.get("type") {
+                    if let Some(arr) = type_val.as_array() {
+                        let non_null_types: Vec<&str> = arr
+                            .iter()
+                            .filter_map(|v| v.as_str())
+                            .filter(|s| *s != "null")
+                            .collect();
+                        if !non_null_types.is_empty() {
+                            resolved_type = Some(non_null_types[0].to_string());
+                        }
+                    }
+                }
+
+                for (key, val) in map {
+                    // Remove propertyNames (not supported)
+                    if key == "propertyNames" {
+                        continue;
+                    }
+
+                    // Replace array-typed `type` with single string type
+                    if key == "type" && resolved_type.is_some() {
+                        new_map.insert(
+                            "type".to_string(),
+                            serde_json::Value::String(resolved_type.as_ref().unwrap().clone()),
+                        );
+                        continue;
+                    }
+
+                    // Convert array-typed `items` (tuple validation) to single schema.
+                    // OpenAI doesn't support `items: [{...}, {...}]`.
+                    if key == "items" {
+                        if let Some(arr) = val.as_array() {
+                            if let Some(first) = arr.first() {
+                                new_map.insert("items".to_string(), Self::sanitize_recursive(first));
+                            }
+                        } else {
+                            new_map.insert(key.clone(), Self::sanitize_recursive(val));
+                        }
+                        continue;
+                    }
+
+                    // If a property value is itself an array of schemas (tuple-style),
+                    // convert it to an object with positional properties.
+                    if let serde_json::Value::Array(arr) = val {
+                        if !arr.is_empty() && arr.iter().all(|v| v.is_object()) {
+                            // This looks like a tuple schema — convert to object
+                            let mut properties = serde_json::Map::new();
+                            let mut required = Vec::new();
+                            for (i, item) in arr.iter().enumerate() {
+                                let param_name = format!("arg{}", i);
+                                properties.insert(param_name.clone(), Self::sanitize_recursive(item));
+                                required.push(serde_json::Value::String(param_name));
+                            }
+                            new_map.insert(key.clone(), serde_json::json!({
+                                "type": "object",
+                                "properties": properties,
+                                "required": required
+                            }));
+                            continue;
+                        }
+                    }
+
+                    new_map.insert(key.clone(), Self::sanitize_recursive(val));
+                }
+
+                serde_json::Value::Object(new_map)
+            }
+            serde_json::Value::Array(arr) => {
+                // If it's an array of schema objects at top level of recursion,
+                // convert to object (handled by ensure_object_type for the real top level)
+                serde_json::Value::Array(arr.iter().map(Self::sanitize_recursive).collect())
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Ensure the top-level schema is `type: "object"`.
+    /// If the schema is missing a type or has a non-object type at the top,
+    /// wrap properties into an object schema.
+    /// Also handles the case where the schema itself IS an array (tuple params).
+    fn ensure_object_type(schema: serde_json::Value) -> serde_json::Value {
+        // If the top-level is an array (tuple-style params like [{type:number},{type:number}]),
+        // convert to an object with positional properties.
+        if let serde_json::Value::Array(arr) = &schema {
+            let mut properties = serde_json::Map::new();
+            let mut required = Vec::new();
+            for (i, item) in arr.iter().enumerate() {
+                let param_name = format!("arg{}", i);
+                properties.insert(param_name.clone(), Self::sanitize_recursive(item));
+                required.push(serde_json::Value::String(param_name));
+            }
+            return serde_json::json!({
+                "type": "object",
+                "properties": properties,
+                "required": required
+            });
+        }
+
+        if let serde_json::Value::Object(ref map) = schema {
+            let top_type = map.get("type").and_then(|v| v.as_str());
+            if top_type == Some("object") {
+                return schema;
+            }
+            // If it has "properties", it's effectively an object — just add the type
+            if map.contains_key("properties") {
+                let mut new_map = map.clone();
+                new_map.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("object".to_string()),
+                );
+                return serde_json::Value::Object(new_map);
+            }
+            // If it's some other type or missing type entirely, wrap it
+            if top_type.is_none() && !map.is_empty() {
+                let mut new_map = map.clone();
+                new_map.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("object".to_string()),
+                );
+                return serde_json::Value::Object(new_map);
+            }
+        }
+        schema
+    }
+}
+
+impl SchemaSanitizer for OpenAISanitizer {
+    fn sanitize(&self, schema: &serde_json::Value) -> serde_json::Value {
+        // `schema` is the raw parameters schema for a tool (from tool.parameters_schema()).
+        // It could be:
+        // 1. A normal object schema: {"type":"object","properties":{...}}
+        // 2. An array (tuple-style): [{"type":"number"},{"type":"number"}]
+        // 3. A schema missing "type":"object" at the top level
+        //
+        // OpenAI requires it to always be type: "object".
+
+        // Case: schema is an array (tuple-style parameters)
+        if let serde_json::Value::Array(arr) = schema {
+            if arr.is_empty() {
+                return serde_json::json!({ "type": "object", "properties": {} });
+            }
+            let mut properties = serde_json::Map::new();
+            let mut required = Vec::new();
+            for (i, item) in arr.iter().enumerate() {
+                let param_name = format!("arg{}", i);
+                properties.insert(param_name.clone(), Self::sanitize_recursive(item));
+                required.push(serde_json::Value::String(param_name));
+            }
+            return serde_json::json!({
+                "type": "object",
+                "properties": properties,
+                "required": required
+            });
+        }
+
+        // Case: schema is an object — sanitize recursively then ensure type: object
+        let sanitized = Self::sanitize_recursive(schema);
+        Self::ensure_object_type(sanitized)
     }
 }
 

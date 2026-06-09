@@ -669,7 +669,12 @@ pub async fn build(
                     agent_executor,
                     config.coding_agents.default_timeout_secs,
                     config.tool_approval.clone(),
-                ));
+                )
+                // Publish finalized tasks to the SAME history stores the status
+                // tool and control panel read from, so completed tasks are
+                // observable (otherwise the executor's private history is invisible).
+                .with_history_sink(ca_history.clone())
+                .with_history_sink(ca_history_db.clone()));
 
                 // Spawn the executor's background processing loop
                 let executor_clone = executor.clone();

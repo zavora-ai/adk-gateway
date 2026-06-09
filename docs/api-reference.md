@@ -315,11 +315,11 @@ All `/ui/api/*` routes require authentication when auth mode is `token` or `pass
 **System info response:**
 ```json
 {
-  "version": "0.8.1",
+  "version": "1.0.0",
   "uptime_secs": 86400,
   "os": "macos",
   "memory_mb": 128,
-  "config_path": "/Users/user/.openclaw/openclaw.json"
+  "config_path": "/Users/user/.adk-gateway/gateway.json"
 }
 ```
 

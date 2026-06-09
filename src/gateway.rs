@@ -174,7 +174,10 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
     }).unwrap_or_default();
 
     let base_instruction = "You are a helpful AI assistant connected via adk-gateway. \
-         Be concise and helpful. When you don't know something, say so.";
+         Be concise and helpful. When you don't know something, say so.\n\n\
+         IMPORTANT: When you capture a screenshot or generate/receive any image data (base64), \
+         you MUST use the `send_photo` tool to display it in the chat. Pass the base64 data \
+         directly to send_photo with the `base64` parameter. Never just describe an image — send it.";
 
     let mut full_instruction = match memory_protocol {
         Some(ref protocol) => format!("{base_instruction}\n\n{protocol}"),
@@ -322,14 +325,25 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
 
                     // Apply provider-specific schema sanitization at invocation time.
                     // Gemini requires certain JSON Schema properties to be removed or
-                    // transformed; other providers receive schemas unmodified.
+                    // transformed; OpenAI requires object-typed parameters and no tuple
+                    // schemas; other providers receive schemas unmodified.
                     let provider = req.model.split('/').next().unwrap_or(&req.model);
                     let needs_sanitization = matches!(provider, "gemini" | "google");
+                    let needs_openai_sanitization = matches!(provider, "openai")
+                        || req.model.starts_with("gpt-")
+                        || req.model.starts_with("o1-")
+                        || req.model.starts_with("o3-")
+                        || req.model.starts_with("o4-")
+                        || req.model.starts_with("codex-")
+                        || req.model.starts_with("chatgpt-");
 
                     if !req.tools.is_empty() {
-                        use crate::schema_sanitizer::{GeminiSanitizer, IdentitySanitizer, SchemaSanitizer};
+                        use crate::schema_sanitizer::{GeminiSanitizer, IdentitySanitizer, OpenAISanitizer, SchemaSanitizer};
+
                         let sanitizer: &dyn SchemaSanitizer = if needs_sanitization {
                             &GeminiSanitizer
+                        } else if needs_openai_sanitization {
+                            &OpenAISanitizer
                         } else {
                             &IdentitySanitizer
                         };
@@ -343,6 +357,11 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
                             tracing::debug!(
                                 tool_count = tool_count,
                                 "applied Gemini schema sanitization to tool schemas"
+                            );
+                        } else if needs_openai_sanitization {
+                            tracing::debug!(
+                                tool_count = tool_count,
+                                "applied OpenAI schema sanitization to tool schemas"
                             );
                         }
                     }
@@ -800,10 +819,10 @@ pub async fn run(mut config: GatewayConfig, port: u16, config_path: PathBuf) -> 
                 ];
                 candidates.iter()
                     .find_map(|p| std::fs::read_to_string(p).ok())
-                    .unwrap_or_else(|| "Check if anything needs attention. If nothing, reply HEARTBEAT_OK.".to_string())
+                    .unwrap_or_else(|| "Check conversation history for pending work. If there is unfinished work, continue it autonomously. If nothing pending, reply HEARTBEAT_OK.".to_string())
             };
 
-            let heartbeat_prompt = format!("ask:{}\n\nIf nothing needs attention, reply with just HEARTBEAT_OK.", heartbeat_content);
+            let heartbeat_prompt = format!("ask:{}\n\nIf all work is complete, reply with just HEARTBEAT_OK.", heartbeat_content);
 
             let heartbeat_job = crate::config::CronJob {
                 id: "heartbeat".to_string(),
@@ -2093,7 +2112,34 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
     };
 
     let response = if collected.text.is_empty() {
-        "I received your message but couldn't generate a response.".into()
+        if collected.max_iterations_reached {
+            let iter_info = collected.iteration_count
+                .map(|c| format!(" after {} iterations", c))
+                .unwrap_or_default();
+            tracing::warn!(
+                tool_call_count = collected.tool_calls.len(),
+                iteration_count = ?collected.iteration_count,
+                "empty response: max iterations reached"
+            );
+            format!(
+                "I hit the maximum processing limit{} while working on your request. The task may be too complex for a single message — try breaking it into smaller steps.",
+                iter_info
+            )
+        } else if !collected.tool_calls.is_empty() {
+            tracing::warn!(
+                tool_call_count = collected.tool_calls.len(),
+                tools = ?collected.tool_calls.iter().map(|tc| tc.name.as_str()).collect::<Vec<_>>(),
+                "empty response: tools were called but no text generated"
+            );
+            // The model executed tools but never produced a text summary.
+            // This often means the last tool call result was the "answer" and
+            // the model considered the task done without narrating.
+            // Provide a helpful fallback rather than a confusing generic message.
+            "I completed the requested actions but didn't generate a text summary. Let me know if you need details about what was done.".to_string()
+        } else {
+            tracing::warn!("empty response: no text, no tools, no error — possible model issue");
+            "I received your message but couldn't generate a response. This may be a temporary issue — please try again.".to_string()
+        }
     } else {
         collected.text
     };
@@ -2301,8 +2347,22 @@ async fn process_message(msg: InboundMessage, state: &GatewayState) -> anyhow::R
 
         if let Some(keyword) = suppress_keyword {
             let trimmed = response.trim();
-            if trimmed == keyword || trimmed.starts_with(&keyword) || trimmed.ends_with(&keyword) {
-                tracing::info!(job_id = %job_id, keyword = %keyword, "task response suppressed (matched suppress_keyword)");
+            let keyword_lower = keyword.to_lowercase();
+            let trimmed_lower = trimmed.to_lowercase();
+
+            // Suppress if:
+            // 1. Exact match (case-insensitive)
+            // 2. Response starts with or ends with the keyword
+            // 3. Response is a prefix of the keyword (truncated streaming, e.g. "HE" from "HEARTBEAT_OK")
+            // 4. Response is very short (≤ 5 chars) from a cron task — clearly not an actionable alert
+            let is_suppressed = trimmed_lower == keyword_lower
+                || trimmed_lower.starts_with(&keyword_lower)
+                || trimmed_lower.ends_with(&keyword_lower)
+                || keyword_lower.starts_with(&trimmed_lower)
+                || (trimmed.len() <= 5 && !trimmed.is_empty());
+
+            if is_suppressed {
+                tracing::info!(job_id = %job_id, keyword = %keyword, response_len = trimmed.len(), "task response suppressed (matched suppress_keyword)");
                 state.task_log.log(job_id, crate::task_log::EVENT_DELIVERED, &format!("{} (suppressed)", keyword));
                 return Ok(());
             }

@@ -364,10 +364,10 @@ mod tests {
     #[test]
     fn test_default_config_values() {
         let config = RateLimitConfig::default();
-        assert_eq!(config.max_calls, 10);
-        assert_eq!(config.window_secs, 5);
-        assert_eq!(config.cooldown_secs, 3);
-        assert_eq!(config.max_triggers, 3);
+        assert_eq!(config.max_calls, 100);
+        assert_eq!(config.window_secs, 30);
+        assert_eq!(config.cooldown_secs, 5);
+        assert_eq!(config.max_triggers, 10);
     }
 
     #[test]

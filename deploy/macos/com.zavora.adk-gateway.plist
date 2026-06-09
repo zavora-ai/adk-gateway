@@ -9,11 +9,13 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>source /Users/jameskaranja/.adk-gateway/env.sh &amp;&amp; exec /usr/local/bin/adk-gateway --config /Users/jameskaranja/.adk-gateway/gateway.json</string>
+        <!-- Update paths below to match your installation -->
+        <string>source $HOME/.adk-gateway/env.sh &amp;&amp; exec /usr/local/bin/adk-gateway --config $HOME/.adk-gateway/gateway.json</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jameskaranja/.openclaw</string>
+    <!-- Update to your home directory -->
+    <string>/Users/YOUR_USERNAME/.adk-gateway</string>
 
     <key>KeepAlive</key>
     <true/>
@@ -22,19 +24,19 @@
     <true/>
 
     <key>StandardOutPath</key>
-    <string>/Users/jameskaranja/.adk-gateway/logs/adk-gateway.stdout.log</string>
+    <string>/Users/YOUR_USERNAME/.adk-gateway/logs/adk-gateway.stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/jameskaranja/.adk-gateway/logs/adk-gateway.stderr.log</string>
+    <string>/Users/YOUR_USERNAME/.adk-gateway/logs/adk-gateway.stderr.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>RUST_LOG</key>
         <string>adk_gateway=info,adk_rust=info,tower_http=info</string>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/jameskaranja/.cargo/bin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key>
-        <string>/Users/jameskaranja</string>
+        <string>/Users/YOUR_USERNAME</string>
     </dict>
 
     <key>ThrottleInterval</key>

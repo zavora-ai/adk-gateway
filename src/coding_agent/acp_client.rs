@@ -4,7 +4,6 @@
 //! The gateway maintains one session per registered agent, reusing it across
 //! multiple task delegations for context preservation and lower latency.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
